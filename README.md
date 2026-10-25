@@ -4,7 +4,7 @@ Runs on your own web server so every lobby device, tablet, phone and computer sh
 forms, officers, staff accounts and settings. Nothing is stored in the visitor's browser.
 
 ## What you need
-- A web host or computer that can run **Node.js 18 or newer** (a small VPS, an office PC, or a Node host such as Render, Railway or Fly.io).
+- A web host or computer that can run **Node.js 18 or newer** (the department's own server or an office PC).
 - A domain or subdomain with **HTTPS**, for example `reception.yourtown.gov` (browsers require HTTPS for secure logins and the signature/PDF features).
 
 ## Quick start
@@ -41,10 +41,6 @@ After an officer logs in once with a connection, the portal keeps working when t
 - **Expiry:** the offline copy stops working after `OFFLINE_DAYS` (default **7**) days without an online login. Set `OFFLINE_DAYS=0` to turn offline use off completely. If an officer leaves, remove their account and keep `OFFLINE_DAYS` short, because a phone that has not connected since cannot be told to delete its copy. An officer can also tap **Remove offline copy** on the home screen.
 - The lobby page also loads offline now, because the PDF viewer is included with the app instead of loaded from the internet.
 
-## Launch on Fly.io (quick test host)
-Install flyctl, open a terminal in this folder and run `bash deploy-fly.sh`. It signs you in (you approve in the browser), creates the app in the `johnathon-goeckel` organization, creates a 1 GB data volume, and deploys one machine. Change the app name or region with `APP=... REGION=... bash deploy-fly.sh`. Add email/translation settings with `fly secrets set` (see the comment in the script). Keep it to one machine.
-
-On the **Location** field (Motor Vehicle Inventory) and **Location of Service** (lockout forms), officers get a **Use my current location** (GPS) button.
 
 ## Put it on your website
 1. **Link (easiest, most reliable):** run the app on a subdomain and link to it from your site:
