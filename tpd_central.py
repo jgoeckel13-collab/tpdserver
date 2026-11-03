@@ -68,6 +68,10 @@ try:
 except Exception:
     pass
 S["mail"] = {**MAIL_DEFAULT, **(S.get("mail") or {})}
+if not S["officers"]:  # first run: starting roster (T10-T20). Add each email in Staff setup.
+    S["officers"] = [{"name": _n, "email": ""} for _n in (
+        "Chief Chris Habekost", "Lt. Bill Brigham", "Sgt. Sherman", "Sgt. Silvia", "Sgt. St. Pierre",
+        "Ofc. Sidoti", "Ofc. Goeckel", "Det. Hollinger", "SRO Medeiros", "Ofc. Durawa", "Ofc. Grant")]
 for _o in S["officers"]:
     _o.setdefault("id", str(uuid.uuid4()))
 
@@ -332,7 +336,7 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
         ".webmanifest": "application/manifest+json", ".png": "image/png", ".jpg": "image/jpeg",
         ".svg": "image/svg+xml", ".ico": "image/x-icon", ".pdf": "application/pdf", ".wasm": "application/wasm"}
 
-OFFICER_PUBLIC = {"login", "manifest.webmanifest", "icon-192.png", "icon-512.png"}
+OFFICER_PUBLIC = {"login", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png"}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
