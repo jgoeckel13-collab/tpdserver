@@ -73,13 +73,14 @@ ROSTER = [  # starting roster in T10-T20 order; emails from the town directory
     ("Sgt. Sherman", "msherman@tisburyma.gov"), ("Sgt. Silvia", "asilvia@tisburyma.gov"), ("Sgt. St. Pierre", "estpierre@tisburyma.gov"),
     ("Ofc. Sidoti", "nsidoti@tisburyma.gov"), ("Ofc. Goeckel", "jgoeckel@tisburyma.gov"),
     ("Det. Hollinger", "phollinger@tisburyma.gov"), ("SRO Medeiros", "cmedeiros@tisburyma.gov"),
-    ("Ofc. Durawa", "ddurawa@tisburyma.gov"), ("Ofc. Grant", "ngrant@tisburyma.gov")]
+    ("Ofc. Durawa", "ddurawa@tisburyma.gov"), ("Ofc. Grant", "ngrant@tisburyma.gov"),
+    ("TPD Admin Rife", "TPDExec@tisburyma.gov")]
 if not S["officers"]:  # first run
     S["officers"] = [{"name": _n, "email": _e} for _n, _e in ROSTER]
 for _o in S["officers"]:  # fill a blank email for a roster name (never overwrites one you entered)
     if not _o.get("email"):
         _o["email"] = dict(ROSTER).get(_o.get("name"), "")
-ROSTER_VER = "20261103"
+ROSTER_VER = "20261103b"
 if S.get("rosterVer") != ROSTER_VER:  # one time: make sure every roster officer is present, in roster order (your own additions stay after them)
     _have = {_o.get("name"): _o for _o in S["officers"]}
     _new = [_have.get(_n) or {"name": _n, "email": _e} for _n, _e in ROSTER]
