@@ -79,6 +79,13 @@ if not S["officers"]:  # first run
 for _o in S["officers"]:  # fill a blank email for a roster name (never overwrites one you entered)
     if not _o.get("email"):
         _o["email"] = dict(ROSTER).get(_o.get("name"), "")
+ROSTER_VER = "20261103"
+if S.get("rosterVer") != ROSTER_VER:  # one time: make sure every roster officer is present, in roster order (your own additions stay after them)
+    _have = {_o.get("name"): _o for _o in S["officers"]}
+    _new = [_have.get(_n) or {"name": _n, "email": _e} for _n, _e in ROSTER]
+    _new += [_o for _o in S["officers"] if _o.get("name") not in dict(ROSTER)]
+    S["officers"] = _new
+    S["rosterVer"] = ROSTER_VER
 for _o in S["officers"]:
     _o.setdefault("id", str(uuid.uuid4()))
 
