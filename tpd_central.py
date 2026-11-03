@@ -68,10 +68,17 @@ try:
 except Exception:
     pass
 S["mail"] = {**MAIL_DEFAULT, **(S.get("mail") or {})}
-if not S["officers"]:  # first run: starting roster (T10-T20). Add each email in Staff setup.
-    S["officers"] = [{"name": _n, "email": ""} for _n in (
-        "Chief Chris Habekost", "Lt. Bill Brigham", "Sgt. Sherman", "Sgt. Silvia", "Sgt. St. Pierre",
-        "Ofc. Sidoti", "Ofc. Goeckel", "Det. Hollinger", "SRO Medeiros", "Ofc. Durawa", "Ofc. Grant")]
+ROSTER = [  # starting roster in T10-T20 order; emails from the town directory (St. Pierre and Durawa: add in Staff setup)
+    ("Chief Chris Habekost", "chabekost@tisburyma.gov"), ("Lt. Bill Brigham", "wbrigham@tisburyma.gov"),
+    ("Sgt. Sherman", "msherman@tisburyma.gov"), ("Sgt. Silvia", "asilvia@tisburyma.gov"), ("Sgt. St. Pierre", ""),
+    ("Ofc. Sidoti", "nsidoti@tisburyma.gov"), ("Ofc. Goeckel", "jgoeckel@tisburyma.gov"),
+    ("Det. Hollinger", "phollinger@tisburyma.gov"), ("SRO Medeiros", "cmedeiros@tisburyma.gov"),
+    ("Ofc. Durawa", ""), ("Ofc. Grant", "ngrant@tisburyma.gov")]
+if not S["officers"]:  # first run
+    S["officers"] = [{"name": _n, "email": _e} for _n, _e in ROSTER]
+for _o in S["officers"]:  # fill a blank email for a roster name (never overwrites one you entered)
+    if not _o.get("email"):
+        _o["email"] = dict(ROSTER).get(_o.get("name"), "")
 for _o in S["officers"]:
     _o.setdefault("id", str(uuid.uuid4()))
 
