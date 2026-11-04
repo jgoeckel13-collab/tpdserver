@@ -54,8 +54,8 @@ async function dbAll(){let st=null;
  return(await pdcAll()).map(f=>({name:f.name,bytes:f.bytes,lang:f.lang,_id:f.id}))}
 async function dbPut(o){try{const f=forms.find(x=>x.name===o.name&&x._id);let r;
   if(f)r=await pdApi('PUT','forms/'+f._id+'?lang='+encodeURIComponent(o.lang||'en'),o.bytes,true);
-  else{r=await pdApi('POST','forms?audience='+(APP==='officer'?'officer':'all')+'&lang='+encodeURIComponent(o.lang||'en')+'&name='+encodeURIComponent(o.name),o.bytes,true);
-   for(const g of forms)if(g.name===o.name&&!g.builtin)g._id=r.id;o._id=r.id}
+  else{r=await pdApi('POST','forms?audience='+(o.aud||(APP==='officer'?'officer':'all'))+'&lang='+encodeURIComponent(o.lang||'en')+'&name='+encodeURIComponent(o.name),o.bytes,true);
+   for(const g of forms)if(g.name===o.name&&!g.builtin)g._id=r.id;o._id=r.id;o._aud=o.aud||(APP==='officer'?'officer':'all')}
   PDC.rev=r.rev;pdcPut({id:r.id,name:o.name,lang:o.lang,ver:r.ver,bytes:o.bytes.slice(0)})}
  catch(x){pdNote('Form not saved to the server: '+x.message,true)}}
 async function dbDel(n){const f=forms.find(x=>x.name===n&&x._id);if(!f)return;

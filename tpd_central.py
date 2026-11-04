@@ -723,7 +723,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return [{"id": f["id"], "name": f["name"], "lang": f["lang"], "audience": f.get("audience", "all"),
                      "ver": f.get("ver", 1)}
                     for f in S["forms"]
-                    if f.get("audience", "all") == "all" or (app == "officer" and officer_ok)]
+                    if f.get("audience", "all") == "all"
+                    or (f.get("audience") == "officer" and app == "officer" and officer_ok)
+                    or (f.get("audience") == "kiosk" and app == "kiosk")]
 
         if p == "version" and m == "GET":
             return self.json(200, {"ver": app_version(app), "rev": S["rev"]})
@@ -935,7 +937,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.fail(400, "That is not a PDF file.")
             name = clean_name(q.get("name"))
             lang = "pt" if q.get("lang") == "pt" else "en"
-            aud = "officer" if q.get("audience") == "officer" else "all"
+            aud = q.get("audience") if q.get("audience") in ("officer", "kiosk") else "all"
             f = next((x for x in S["forms"] if x["name"].lower() == name.lower() and x.get("audience", "all") == aud), None)
             if f:
                 f.update(lang=lang, name=name, ver=f.get("ver", 1) + 1)
