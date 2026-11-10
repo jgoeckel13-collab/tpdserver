@@ -47,10 +47,16 @@ async function pdForms(list){const cache=await pdcAll(),by=new Map(cache.map(f=>
   else if(c.name!==f.name||c.lang!==f.lang){c.name=f.name;c.lang=f.lang;pdcPut(c)}
   out.push({name:f.name,bytes:c.bytes.slice(0),lang:f.lang,_id:f.id,_aud:f.audience})}
  for(const id of by.keys())pdcDel(id);return out}
+const PD_SIGNED='pdc_signed_until',pdSigned=v=>{try{v?localStorage.setItem(PD_SIGNED,String(v)):localStorage.removeItem(PD_SIGNED)}catch{}};
+const pdSignedOk=()=>{try{return +localStorage.getItem(PD_SIGNED)>Date.now()}catch{return false}};
+/* officer data on this device: saved forms, recent forms and drafts */
+async function pdWipeLocal(){try{for(const k of await caches.keys())if(k.startsWith('pd-central-officer'))await caches.delete(k)}catch{}
+ await pdcClear();try{indexedDB.deleteDatabase('pd_recent_'+APP)}catch{}try{localStorage.removeItem(NS+'draft')}catch{}recent=[];pdSigned(0)}
+if(APP==='officer'){const _r=render;render=function(){if(PDC.locked){$('#app').innerHTML='<div class="card" style="text-align:center"><h3 style="margin-top:0">Sign-in needed</h3><p>The server can\'t be reached and this device\'s sign-in has expired, so the officer app is locked.</p><p class="mut">Connect to the department network, then sign in again.</p><button onclick="location.href=\'login\'">Try again</button></div>';return}return _r.apply(this,arguments)}}
 async function dbAll(){let st=null;
- try{st=await pdApi('GET','state?app='+APP)}catch(x){if(x.status===401&&APP==='officer'){location.href='login';return[]}}
- if(st){pdOffline(false);pdApply(st);render();return await pdForms(st.forms||[])}
- pdOffline(true);if(APP==='officer')session={u:'Officer',role:'officer',open:true};
+ try{st=await pdApi('GET','state?app='+APP)}catch(x){if(x.status===401&&APP==='officer'){pdSigned(0);location.href='login';return[]}}
+ if(st){pdOffline(false);PDC.locked=false;if(APP==='officer'&&st.session)pdSigned(Date.now()+12*3600e3);pdApply(st);render();return await pdForms(st.forms||[])}
+ pdOffline(true);if(APP==='officer'){if(!pdSignedOk()){PDC.locked=true;session=null;render();return[]}session={u:'Officer',role:'officer',open:true}}
  return(await pdcAll()).map(f=>({name:f.name,bytes:f.bytes,lang:f.lang,_id:f.id}))}
 async function dbPut(o){try{const f=forms.find(x=>x.name===o.name&&x._id);let r;
   if(f)r=await pdApi('PUT','forms/'+f._id+'?lang='+encodeURIComponent(o.lang||'en'),o.bytes,true);
@@ -70,12 +76,11 @@ async function doLogin(){const u=$('#lu').value.trim(),p=$('#lp').value;lastU=u;
   if(r.session.role==='officer'){pdApi('POST','logout').catch(()=>{});return say('That is an officer account. It can sign in to the officer app, not Staff setup.')}
   session=r.session;await pdUsers();touch();go('admin')}catch(x){say(x.message)}}
 function logout(){if(APP==='officer')return go('home');if(session)pdApi('POST','logout').catch(()=>{});session=null;editOff=-1;clearTimeout(idleT);go('home')}
-async function pdOfficerLogout(){if(!confirm('Sign out of the officer app on this device?'))return;
+async function pdOfficerLogout(){if(!confirm('Sign out of the officer app on this device? Recent forms and any unfinished form on this device are deleted.'))return;
  try{await pdApi('POST','logout')}catch{}
- try{for(const k of await caches.keys())if(k.startsWith('pd-central-officer'))await caches.delete(k)}catch{}
- await pdcClear();location.href='login'}
-async function resetPw(){const u=$('#ru').value,p=$('#rp').value;if(!session)return;if(p.length<10)return say('Password must be at least 10 characters.');
- try{await pdApi('POST','password',{u,p});$('#rp').value='';say('Password updated.')}catch(x){say(x.message)}}
+ await pdWipeLocal();location.href='login'}
+async function resetPw(){const u=$('#ru').value,p=$('#rp').value,old=($('#rpo')||{}).value||'';if(!session)return;if(!old)return say('Enter your current password.');if(p.length<10)return say('Password must be at least 10 characters.');
+ try{await pdApi('POST','password',{u,p,old});$('#rp').value='';$('#rpo').value='';say('Password updated.')}catch(x){say(x.message)}}
 async function addUser(){if(!session||session.role!=='admin')return;const u=$('#nu').value.trim(),p=$('#np').value,role=$('#nr').value;
  if(!u)return say('Enter a username.');if(p.length<10)return say('Password must be at least 10 characters.');
  try{await pdApi('POST','users',{u,p,role});await pdUsers();render();say('Account added.')}catch(x){say(x.message)}}
@@ -87,6 +92,7 @@ function pdMailCard(){if(!session||session.role!=='admin'||PDC.offline)return'';
  return`<div class="card" id="pdMail"><h3 style="margin-top:0">Email sending</h3>
  <p class="mut">When this is on, <b>Email officer</b> sends the signed PDF straight from the server: the selected officer(s) go in the To line, the CC above is copied, and it always comes from the sender address below. Visitors never see or type any address.</p>
  <label class="chk"><input type="checkbox" id="mOn"> Send email from the server</label>
+ <label class="chk"><input type="checkbox" id="mSelf"> Let visitors email themselves a copy (kiosk)</label>
  <label>Sender address (From)</label><input type="email" id="mFrom" placeholder="receptionist@tisburyma.gov" autocomplete="off">
  <label>Sender name</label><input type="text" id="mName" placeholder="Tisbury PD Receptionist" autocomplete="off">
  <label>Mail server (SMTP)</label><input type="text" id="mHost" placeholder="smtp.office365.com" autocapitalize="off" autocomplete="off">
@@ -100,8 +106,8 @@ function pdMailCard(){if(!session||session.role!=='admin'||PDC.offline)return'';
  <label>Extra allowed officer addresses <span class="mut">(officers above are always allowed; e.g. @tisburyma.gov)</span></label><input type="text" id="mRa" autocomplete="off" autocapitalize="off">
  <div class="row"><button class="sm" onclick="pdMailSave()">Save</button><button class="alt sm" onclick="pdMailTest()">Send test email</button></div><p id="mMsg" class="mut"></p></div>`}
 async function pdMailLoad(){const c=document.getElementById('pdMail');if(!c||c._ld)return;c._ld=1;
- try{const m=await pdApi('GET','mail');$('#mOn').checked=!!m.on;$('#mFrom').value=m.from||'';$('#mName').value=m.name||'';$('#mHost').value=m.host||'';$('#mPort').value=m.port||587;$('#mSec').value=m.sec||'starttls';$('#mUser').value=m.user||'';$('#mRk').value=m.relayKey||'';$('#mRo').value=m.relayOrigins||'';$('#mRa').value=m.relayAllow||'';$('#mPass').placeholder=m.passSet?'(saved - leave blank to keep)':''}catch(x){$('#mMsg').textContent=x.message}}
-const pdMailVals=()=>({on:$('#mOn').checked,from:$('#mFrom').value.trim(),name:$('#mName').value.trim(),host:$('#mHost').value.trim(),port:+$('#mPort').value||587,sec:$('#mSec').value,user:$('#mUser').value.trim(),pass:$('#mPass').value,relayKey:$('#mRk').value.trim(),relayOrigins:$('#mRo').value.trim(),relayAllow:$('#mRa').value.trim()});
+ try{const m=await pdApi('GET','mail');$('#mOn').checked=!!m.on;$('#mSelf').checked=m.selfOn!==false;$('#mFrom').value=m.from||'';$('#mName').value=m.name||'';$('#mHost').value=m.host||'';$('#mPort').value=m.port||587;$('#mSec').value=m.sec||'starttls';$('#mUser').value=m.user||'';$('#mRk').value=m.relayKey||'';$('#mRo').value=m.relayOrigins||'';$('#mRa').value=m.relayAllow||'';$('#mPass').placeholder=m.passSet?'(saved - leave blank to keep)':''}catch(x){$('#mMsg').textContent=x.message}}
+const pdMailVals=()=>({on:$('#mOn').checked,selfOn:$('#mSelf').checked,from:$('#mFrom').value.trim(),name:$('#mName').value.trim(),host:$('#mHost').value.trim(),port:+$('#mPort').value||587,sec:$('#mSec').value,user:$('#mUser').value.trim(),pass:$('#mPass').value,relayKey:$('#mRk').value.trim(),relayOrigins:$('#mRo').value.trim(),relayAllow:$('#mRa').value.trim()});
 async function pdMailSave(){const g=$('#mMsg');g.textContent='Saving...';try{const r=await pdApi('PUT','mail',pdMailVals());$('#mPass').value='';if(r.passSet)$('#mPass').placeholder='(saved - leave blank to keep)';canEmail=!!r.mailOn;PDC.from=r.from||'';PDC.selfOn=!!r.selfOn;g.textContent=r.mailOn?'Saved. Email officer now sends from '+r.from+'.':'Saved. Server email is off; Email officer uses the device mail app.'}catch(x){g.textContent=x.message}}
 async function pdMailTest(){const g=$('#mMsg'),to=prompt('Send a test email to:',$('#mFrom').value.trim());if(!to)return;g.textContent='Sending...';
  try{await pdApi('PUT','mail',pdMailVals());$('#mPass').value='';await pdApi('POST','mail/test',{to});g.textContent='Test email sent to '+to+'. Check that inbox (and junk).'}catch(x){g.textContent='Test failed: '+x.message}}
@@ -146,5 +152,5 @@ setInterval(async()=>{if(document.hidden)return;const home=view==='home';
   if(PDC.ver&&v.ver!==PDC.ver){PDC.pendingReload=true}
   if(PDC.pendingReload&&home){location.reload();return}
   if(PDC.rev!==null&&v.rev!==PDC.rev&&home)await pdRefresh()}
- catch(x){if(x.status===401&&APP==='officer'){if(home)location.href='login';else pdNote('Your sign-in expired. Finish this form, then sign in again.',true)}else if(!x.status)pdOffline(true)}},45000);
+ catch(x){if(x.status===401&&APP==='officer'){pdSigned(0);if(home)location.href='login';else pdNote('Your sign-in expired. Finish this form, then sign in again.',true)}else if(!x.status)pdOffline(true)}},45000);
 /* ==== end TPD Central ==== */

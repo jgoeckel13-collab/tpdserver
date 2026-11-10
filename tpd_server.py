@@ -32,64 +32,6 @@ CERT_DIR = os.path.join(HERE, "cert")
 CERT_FILE = os.path.join(CERT_DIR, "tpd-server.crt")
 KEY_FILE = os.path.join(CERT_DIR, "tpd-server.key")
 
-# Built-in localhost certificate, used when "cryptography" can't be installed
-# (e.g. portable Python with no pip). Valid for localhost / 127.0.0.1 only.
-BUILTIN_CRT = """-----BEGIN CERTIFICATE-----
-MIIC9zCCAd+gAwIBAgIUPIxG4+QC5d4Y1QS1MrazeeIRqOcwDQYJKoZIhvcNAQEL
-BQAwGTEXMBUGA1UEAwwOVFBEIEFwcCBTZXJ2ZXIwHhcNMjYxMDI0MjM0NTMzWhcN
-MjkwMTI3MjM0NTMzWjAZMRcwFQYDVQQDDA5UUEQgQXBwIFNlcnZlcjCCASIwDQYJ
-KoZIhvcNAQEBBQADggEPADCCAQoCggEBALcpqzep1EJA2lOwUa9FCZHN+xuMApxp
-C3oFX4RoOEr9+sPq6Q9eC7BPF1TUxHp29DDJcO3rGHVoYwv2LF3uWNyiXp+5iFvF
-f7RR/ikfNG4PRs4EZbw4iIbqv3efgYFTMyK6uEDJAI948ILStO9ICtLWselyCwRR
-7XSpU3IzWdbDCVsPgSQtxiuCn8mSaU0BEfqzxbQP7bFXvaqxhpvREait3bddQbur
-QX0eZdsMTvxv2i4TTb87UVVNmhEF2zJEdx1WJBAQMBYPg/v3BSEm1N0egMmWBUGy
-qoFABRGVX61eEv1Z0rvDoFalF5ZigC2GmxdXrnI/xswYdqzfl4H1umcCAwEAAaM3
-MDUwJQYDVR0RBB4wHIIJbG9jYWxob3N0gglsb2NhbGhvc3SHBH8AAAEwDAYDVR0T
-AQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEALh6wu8YSpvFB85XzURwWCmCnRS8m
-Q/YZcpDrxihMhnNsCcXUEGzAar07n4W3YHhdK/VTC6vAtNsTLUJlPFkWJErP9aMU
-3/ok5IbzSP41neH0sLiwW6AxJzMPRGxAAv5ssjIB7Su2MHYM0k2vkVD4ioUN0fW+
-IcSlVBYZwqewHGZci6W9GD7BuqfjWe2Au82Pa6PqIboKJqcXREdWZynpTcVWwGsI
-RD772TUSMXiHhHiMSL7a/Buqdgsrnx3R0tLy/+1EKuJh3afl43dR9nRDNJ5VF9tl
-b9iMxQ82FZU+5bvIDa/HpjBTZedFuH23Vs1VOoDEPuDAZGkIsTQkyCHQVw==
------END CERTIFICATE-----
-"""
-BUILTIN_KEY = """-----BEGIN RSA PRIVATE KEY-----
-MIIEpQIBAAKCAQEAtymrN6nUQkDaU7BRr0UJkc37G4wCnGkLegVfhGg4Sv36w+rp
-D14LsE8XVNTEenb0MMlw7esYdWhjC/YsXe5Y3KJen7mIW8V/tFH+KR80bg9GzgRl
-vDiIhuq/d5+BgVMzIrq4QMkAj3jwgtK070gK0tax6XILBFHtdKlTcjNZ1sMJWw+B
-JC3GK4KfyZJpTQER+rPFtA/tsVe9qrGGm9ERqK3dt11Bu6tBfR5l2wxO/G/aLhNN
-vztRVU2aEQXbMkR3HVYkEBAwFg+D+/cFISbU3R6AyZYFQbKqgUAFEZVfrV4S/VnS
-u8OgVqUXlmKALYabF1eucj/GzBh2rN+XgfW6ZwIDAQABAoIBAAVQ5JYqfy2AsI8Y
-p6sRf8jnQUAxuZesv53S6LLkMkVDugX6qOxk9RJ9nfZv1tecR6BGdtkcGpGGlJO+
-mT4NEpYtiwqFIE1T95qWFwbX6YK/Co9X9rq8qoKKVXR7p1uuCWaa8O/fnzA+Bdj+
-LZMuTf+3JhXAIhkfgAFQf5c2bbqU0cBD7+uYFW+Io8QoXr2d/sqVs1004DvRFPBJ
-/cxeKvu3yL1mommYFDV2WS+nOWiLluZWXEwV54A6mUn2nq8ISIKA5A3jDSm81TEN
-RF/Ivw054naOj9uMc9fhSljPRQaajFDfAKatZcb8uMOZJ5Uduu6qpA6hFoNXhQN5
-6tz13Q0CgYEA6UM+OFNWtwlkfOSQdV64PY5iKJ73jdg9Ix7DA4GcjLUwFCShfG1w
-XdXp0hJtpiwJSq/1GBrve2yetK8ksCUmIl4RNbd6Z7hOd2TRpxtyfiBQKuxmL00r
-tq/6KU2ZCa4dQcbrtJfrF/aQ/JiuJxPPK9sJSQ4DjoUwmpyERsrqVaMCgYEAyQQ/
-/59g35FG/0veUGvkBavtHC+5jTtukNVRizJT8FPSCCG5K98Pufqn31PnULQOgcZG
-qX0vSpC+TdB4K2881iRU1OKM8m0tr0vIPgYXjWW/4dELLAlK8M/QlpZYOlfDB1B/
-VBzQVDYFF4r6pWAeLCu3E1LheY/H38COJNef7G0CgYEApYMnFQRdVUb+3He54O4y
-wMrU74nMkgNLbi4XpddD47t0v/Y193oX7x0n6f1VfEFm3m339QC3yNYLzp0v5SSW
-6G/iukDUQ+BNHP6WnIInPUNkXvCamRmi2OAJG2GKI4o+DDw/Z0ccc0ZrHjCf8e5m
-Y/HppsKg13G+SRah7TFyEQ0CgYEApmWYPJfH7wkpRiedbeEBrhg1fMGczWZHDikn
-CRyuEyCvmf+gcsqBECiHUfz4W/vQjmh9EcwIm6bZgTxyXTIFoBYPCvJGTl9GE/ed
-WIpecLOrdNhAcUF4AYNlXWIywojnbmSaIhx/71WQPX7UIJVCJLpDIAHZl3EHuRaC
-E8lSHrkCgYEAoRV/w1Ley7Qot6ZteA850/mCI+YYBrEFjE9mJtNZdqkVZAUTR0FF
-M+jzM77GcbOIB+rbZhdsNXtA5eebiYvL4m7THpDi9SigZiR4zv7aGvA1xn9MnfE6
-U60ZnFl2xnNEpwfDy97A+nEhWfedI7VeU0OKB/gPtJLSrQDEwWoybwE=
------END RSA PRIVATE KEY-----
-"""
-
-
-def write_builtin_cert():
-    os.makedirs(CERT_DIR, exist_ok=True)
-    with open(CERT_FILE, "w") as f:
-        f.write(BUILTIN_CRT)
-    with open(KEY_FILE, "w") as f:
-        f.write(BUILTIN_KEY)
-    print("Using built-in localhost certificate.")
 
 
 def lan_ip():
@@ -289,7 +231,60 @@ def this_pc_names():
     return dns, ips
 
 
-def make_cert(quiet=False):
+_PRIVATE_NETS = [("10.0.0.0", "255.0.0.0"), ("172.16.0.0", "255.240.0.0"),
+                 ("192.168.0.0", "255.255.0.0"), ("127.0.0.0", "255.0.0.0"), ("100.64.0.0", "255.192.0.0")]
+
+
+def _ip4(s):
+    return bytes(int(x) for x in s.split("."))
+
+
+CA_LIMITS = os.path.join(CERT_DIR, "tpd-ca-limits.json")
+
+
+def _covered(dns, ips):
+    """True if the CA's limits (if any) allow every name and address this server uses."""
+    try:
+        lim = _json.load(open(CA_LIMITS))
+    except Exception:
+        return True  # older CA without limits, or no record
+    def ok_dns(d):
+        return any(d == x or d.endswith("." + x) for x in lim["dns"])
+    def ok_ip(ip):
+        a = int.from_bytes(_ip4(ip), "big")
+        return any(a & int.from_bytes(_ip4(m), "big") == int.from_bytes(_ip4(n), "big") for n, m in lim["ips"])
+    return all(ok_dns(d) for d in dns) and all(ok_ip(i) for i in ips)
+
+
+def _name_constraints(dns, ips=()):
+    """CA may only vouch for this server's own names and private (LAN/Tailscale) addresses,
+    so even a stolen CA key can't be used to fake Gmail, a bank, CJIS, etc. on department devices."""
+    names = []
+    for d in dns:
+        names.append(d)
+        if "." in d and d != "localhost":
+            names.append(d.split(".", 1)[1])  # the PC's domain, e.g. tisbury.local
+    seen, subtrees = set(), []
+    for d in names:
+        if d and d not in seen:
+            seen.add(d)
+            subtrees.append(_seq(_tlv(0x82, d.encode())))
+    nets = list(_PRIVATE_NETS) + [(i, "255.255.255.255") for i in ips]  # plus this PC's own addresses
+    for net, mask in nets:
+        subtrees.append(_seq(_tlv(0x87, _ip4(net) + _ip4(mask))))
+    _json.dump({"dns": list(seen), "ips": nets}, open(CA_LIMITS, "w"))
+    return _ext("2.5.29.30", _seq(_tlv(0xA0, b"".join(subtrees))), True)
+
+
+def ca_is_limited():
+    try:
+        der = _b64.b64decode("".join(l for l in open(CA_CRT).read().splitlines() if not l.startswith("-----")))
+        return _oid("2.5.29.30") in der
+    except Exception:
+        return False
+
+
+def make_cert(quiet=False, new_ca=False):
     """Make sure cert\\tpd-server.crt is valid for this PC's current names and addresses."""
     global CERT_FILE, KEY_FILE
     it_crt, it_key = os.path.join(IT_DIR, "server.crt"), os.path.join(IT_DIR, "server.key")
@@ -298,6 +293,13 @@ def make_cert(quiet=False):
         return
     CERT_FILE, KEY_FILE = os.path.join(CERT_DIR, "tpd-server.crt"), os.path.join(CERT_DIR, "tpd-server.key")
     dns, ips = this_pc_names()
+    if new_ca:
+        for f in (CA_CRT, CA_KEY, INFO, CA_LIMITS):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        print("Old certificate authority removed. Every device must install the new TPD-Local-CA.crt (see /setup).")
     try:
         info = _json.load(open(INFO))
         fresh = datetime.datetime.fromisoformat(info["expires"]) - datetime.datetime.now(datetime.timezone.utc) > datetime.timedelta(days=30)
@@ -315,10 +317,15 @@ def make_cert(quiet=False):
             der = _cert("TPD Local CA", ca, "TPD Local CA", ca, 3650, [
                 _ext("2.5.29.19", _seq(_TRUE, _int(0)), True),
                 _ext("2.5.29.15", _bits(b"\x86", 1), True),
-                _ext("2.5.29.14", _oct(kid))])
+                _ext("2.5.29.14", _oct(kid)),
+                _name_constraints(dns, ips)])
             open(CA_KEY, "w").write(_key_pem(ca))
             open(CA_CRT, "w").write(_pem("CERTIFICATE", der))
         ca = _read_key(CA_KEY)
+        if not _covered(dns, ips):
+            print("WARNING: this PC's name or network address changed to one the certificate authority does not cover.\n"
+                  "         Other devices will reject the connection. Start once with --new-ca and reinstall the\n"
+                  "         certificate on each device (or ask IT for a certificate; see cert-from-it).")
         print("Making the server certificate for: " + ", ".join(dns + ips))
         k = _rsa()
         san = b"".join([_tlv(0x82, d.encode()) for d in dns] + [_tlv(0x87, bytes(int(x) for x in ip.split("."))) for ip in ips])
@@ -334,8 +341,9 @@ def make_cert(quiet=False):
         exp = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=825)).isoformat()
         _json.dump({"dns": dns, "ips": ips, "expires": exp}, open(INFO, "w"))
     except Exception as x:
-        print("Could not make a certificate (" + str(x) + "); using the built-in localhost one.")
-        write_builtin_cert()
+        print("Could not make a certificate: " + str(x))
+        raise SystemExit(1)
+
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

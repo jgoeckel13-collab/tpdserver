@@ -1,0 +1,7 @@
+# Never commit live server data: passwords, the SMTP password, accounts and the certificate keys
+central/data/
+cert/
+cert-from-it/
+python/
+__pycache__/
+*.pyc

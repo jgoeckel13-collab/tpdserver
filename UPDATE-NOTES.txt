@@ -1,0 +1,19 @@
+TPD Central - security update (2026-11-10)
+
+AFTER INSTALLING THIS UPDATE
+1. Replace the certificate authority once (the old one could vouch for any website):
+     Start TPD Central.bat --https --lan --new-ca
+   Then on every computer/tablet/phone, remove the old "TPD Local CA" certificate and
+   install the new one from https://<server>/setup.
+   If the server PC's name or address ever changes, the window will say so; run --new-ca again.
+2. Email sending > new switch "Let visitors email themselves a copy (kiosk)". It starts ON.
+3. The first admin account can now only be created on the server computer itself
+   (use the localhost address there). This also applies after --reset-users.
+4. Changing a password now asks for your current password.
+5. Officer app: Sign out now also deletes Recent forms and any unfinished form on that device.
+   If the server can't be reached and the device's sign-in is older than 12 hours, the app locks.
+6. Optional: to stop loading the car-seat label reader from the internet, put tesseract.min.js,
+   worker.min.js, the tesseract-core *.wasm.js files and eng.traineddata.gz (tesseract.js 5.1.1)
+   in central\officer\vendor\ocr\ . The app uses that copy when it is there.
+
+Never commit central\data or cert\ to GitHub (the .gitignore file now blocks them).

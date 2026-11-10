@@ -60,7 +60,7 @@ os.makedirs(FORMS, exist_ok=True)
 LOCK = threading.RLock()
 
 # ---------- storage ----------
-MAIL_DEFAULT = {"on": False, "selfOn": False, "relayKey": "", "relayOrigins": "", "relayAllow": "", "from": "", "name": "", "host": "", "port": 587, "sec": "starttls", "user": "", "pass": ""}
+MAIL_DEFAULT = {"on": False, "selfOn": True, "relayKey": "", "relayOrigins": "", "relayAllow": "", "from": "", "name": "", "host": "", "port": 587, "sec": "starttls", "user": "", "pass": ""}
 S = {"users": [], "officers": [], "cc": "", "kinds": {}, "gmkey": "", "forms": [], "rev": 1, "mail": dict(MAIL_DEFAULT)}
 try:
     with open(SF, encoding="utf-8") as f:
@@ -68,6 +68,9 @@ try:
 except Exception:
     pass
 S["mail"] = {**MAIL_DEFAULT, **(S.get("mail") or {})}
+if not S.get("selfMig"):  # one time: the old admin screen had no switch and always stored "off"
+    S["mail"]["selfOn"] = True
+    S["selfMig"] = 1
 ROSTER = [  # starting roster in T10-T20 order; emails from the town directory 
     ("Chief Chris Habekost", "chabekost@tisburyma.gov"), ("Lt. Bill Brigham", "wbrigham@tisburyma.gov"),
     ("Sgt. Sherman", "msherman@tisburyma.gov"), ("Sgt. Silvia", "asilvia@tisburyma.gov"), ("Sgt. St. Pierre", "estpierre@tisburyma.gov"),
@@ -94,6 +97,10 @@ for _o in S["officers"]:
 def mail_on():
     m = S["mail"]
     return bool(m.get("on") and m.get("host") and m.get("from"))
+
+
+def self_on():
+    return mail_on() and bool(S["mail"].get("selfOn"))
 
 
 NO_REPLY = "Do Not Reply <no-reply@no-reply.invalid>"  # .invalid never exists, so replies bounce at once
@@ -271,7 +278,11 @@ button{width:100%;margin-top:18px;padding:13px;font:600 17px system-ui;border:0;
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const m=document.getElementById('m');m.textContent='';
 try{const r=await fetch('../api/login',{method:'POST',credentials:'same-origin',headers:{'x-pd':'1','content-type':'application/json'},
 body:JSON.stringify({u:document.getElementById('u').value.trim(),p:document.getElementById('p').value,long:true})});
-const d=await r.json();if(!r.ok)throw new Error(d.error||'Sign-in failed');location.href='./'}catch(x){m.textContent=x.message}}</script></body></html>"""
+const d=await r.json();if(!r.ok)throw new Error(d.error||'Sign-in failed');
+const who=String(d.session.u).toLowerCase();let last=null;try{last=localStorage.getItem('pdc_last_user')}catch{}
+if(last!==who){try{indexedDB.deleteDatabase('pd_recent_officer');localStorage.removeItem('pdo_draft')}catch{}}
+try{localStorage.setItem('pdc_last_user',who);localStorage.setItem('pdc_signed_until',String(Date.now()+12*3600e3))}catch{}
+location.href='./'}catch(x){m.textContent=x.message}}</script></body></html>"""
 
 
 # ---------- security helpers ----------
@@ -358,6 +369,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "TPD-Central"
     sys_version = ""
     secure = False
+    timeout = 60  # seconds a connection may sit idle or trickle data before it is dropped
 
     def log_message(self, fmt, *args):
         if "/api/version" in (args[0] if args else ""):
@@ -395,11 +407,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def fail(self, code, msg):
         self.json(code, {"error": msg})
 
-    def body(self, limit):
-        n = int(self.headers.get("content-length") or 0)
-        if n > limit:
+    def pre_read(self, cap):
+        """Read the request body up front, outside the shared lock, so a slow or
+        broken client can never hold up the rest of the server."""
+        self._raw = b""
+        if self.command in ("GET", "HEAD", "OPTIONS", "DELETE"):
+            return
+        try:
+            n = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            raise HttpError(400, "Bad request")
+        if n < 0:
+            raise HttpError(400, "Bad request")
+        if n > cap:
             raise HttpError(413, "File too large")
-        return self.rfile.read(n) if n else b""
+        b = self.rfile.read(n) if n else b""
+        if len(b) != n:
+            raise HttpError(400, "Incomplete request")
+        self._raw = b
+
+    def body(self, limit):
+        b = getattr(self, "_raw", None)
+        if b is None:
+            raise HttpError(500, "Body not read")
+        if len(b) > limit:
+            raise HttpError(413, "File too large")
+        return b
 
     def read_json(self, limit=1_000_000):
         b = self.body(limit)
@@ -448,6 +481,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             u = urlsplit(self.path)
             p = unquote(u.path)
+            if p.startswith("/api/"):
+                self.pre_read(40_000_000 if p in ("/api/relay", "/api/email") else
+                              25_000_000 if p.startswith("/api/forms") else 2_000_000)
             if p == "/api/relay":
                 return self.api_relay()
             if p in ("/api/email", "/api/mail/test") and self.command == "POST":
@@ -479,7 +515,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.app_file(app, rest.lstrip("/"))
         except HttpError as e:
             self.fail(e.code, e.msg)
-        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError, TimeoutError):
             pass
         except Exception as e:
             print("Server error:", repr(e))
@@ -499,7 +535,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if app == "officer" and rel == "login":
             note = ""
             if not S["users"]:
-                note = '<p class="n">No accounts yet. Create the admin account first: open the Visitor app and tap Staff setup.</p>'
+                note = '<p class="n">No accounts yet. On the server computer itself, open the Visitor app (localhost address) and tap Staff setup to create the admin account.</p>'
             return self.send(200, LOGIN.replace("__NOTE__", note).encode(), "text/html; charset=utf-8",
                              {"Cache-Control": "no-store"})
         if rel == "sw.js":
@@ -551,11 +587,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # Visitor emails a copy to themselves. Fixed subject/body, one recipient,
                     # nobody else copied, and replies go to an address that cannot exist.
                     officer_app = bool(s) and b.get("app") == "officer"  # always allowed in the officer app
+                    if not officer_app and not self_on():
+                        return self.fail(403, "Email copies are turned off. Ask at the front desk.")
                     to = str(b.get("self") or "").strip()
                     if len(to) > 200 or not re.match(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$", to):
                         return self.fail(400, "Enter a valid email address.")
                     if limited("self:" + (s["u"] if officer_app else self.ip()), 30 if officer_app else 3, 600) \
-                            or limited("selfto:" + to.lower(), 3, 3600):
+                            or limited("selfto:" + to.lower(), 3, 3600) \
+                            or (not officer_app and limited("anon-all", 40, 3600)):
                         return self.fail(429, "Too many emails. Ask at the front desk.")
                     files = self.pdf_files(b)
                     pt = b.get("lang") == "pt"
@@ -572,7 +611,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     who = s["u"] if officer_app else "visitor@" + self.ip()
                     p = "email-self"
                 else:
-                    if limited("mail:" + self.ip(), 10, 600):
+                    if limited("mail:" + self.ip(), 10, 600) or (not s and limited("anon-all", 40, 3600)):
                         return self.fail(429, "Too many emails. Try again later.")
                     ids = b.get("to") if isinstance(b.get("to"), list) else []
                     offs = [o for o in S["officers"] if o.get("id") in ids and o.get("email")]
@@ -633,6 +672,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.relay_out(501, {"error": "Email is not set up on the server."})
                 kind = b.get("kind")
                 if kind == "test":
+                    if limited("relaytest:" + self.ip(), 5, 3600):
+                        return self.relay_out(429, {"error": "Too many test emails. Try again later."})
                     to = str((b.get("to") or [""])[0]).strip()
                     if not ok_email(to) or not to:
                         return self.relay_out(400, {"error": "Enter a valid address for the test."})
@@ -654,6 +695,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     subject = re.sub(r"[\r\n]+", " ", str(b.get("subject") or "Completed form"))[:200]
                     job = (to, S["cc"], subject, str(b.get("text") or "")[:4000], files)
                 elif kind == "self":
+                    if not mm.get("selfOn"):
+                        return self.relay_out(403, {"error": "Email copies are turned off on the server."})
                     to = str(b.get("self") or "").strip()
                     if len(to) > 200 or not re.match(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$", to):
                         return self.relay_out(400, {"error": "Enter a valid email address."})
@@ -737,7 +780,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                    "ver": app_version(app), "officers": S["officers"], "cc": S["cc"],
                    "kinds": S["kinds"].get(app, {}), "forms": form_list(),
                    "mailOn": mail_on(), "mailFrom": S["mail"]["from"] if mail_on() else "",
-                   "selfOn": mail_on()}
+                   "selfOn": self_on()}
             if app == "officer":
                 out["gmkey"] = S.get("gmkey", "")
             if s and s["role"] == "admin":
@@ -747,6 +790,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == "setup" and m == "POST":
             if S["users"]:
                 return self.fail(409, "Already set up")
+            if self.ip() not in ("127.0.0.1", "::1"):
+                return self.fail(403, "Create the first admin account on the server computer itself "
+                                      "(open the Visitor app there with localhost in the address).")
             b = self.read_json()
             u, pw = str(b.get("u") or "").strip(), str(b.get("p") or "")
             if not u or len(u) > 60:
@@ -832,6 +878,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             u, pw = str(b.get("u") or ""), str(b.get("p") or "")
             if s["role"] != "admin" and u != s["u"]:
                 return self.fail(403, "Not allowed")
+            me = next((x for x in S["users"] if x["u"] == s["u"]), None)
+            if limited("pwchk:" + s["u"], 5, 600):
+                return self.fail(429, "Too many attempts. Wait a few minutes.")
+            if not me or not hmac.compare_digest(hash_pw(str(b.get("old") or ""), me["salt"]), me["hash"]):
+                audit("password-failed", s["u"], user=u, ip=self.ip())
+                return self.fail(403, "Your current password is not correct.")
             if len(pw) < 10:
                 return self.fail(400, "Password must be at least 10 characters.")
             r = next((x for x in S["users"] if x["u"] == u), None)
@@ -839,6 +891,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.fail(404, "Not found")
             r.update(mk_user(r["u"], pw, r["role"]))
             save()
+            cur_t = self.cookies().get("pdsid")
+            for k in [k for k, v in SESS.items() if v["u"] == r["u"] and k != cur_t]:
+                SESS.pop(k, None)  # sign the account out everywhere else
             audit("password", s["u"], user=u)
             return self.json(200, {"ok": True})
 
@@ -846,7 +901,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             b = self.read_json(2_000_000)
             key, val = b.get("key"), b.get("value")
             if key == "kinds":
-                if not need():
+                if not (need() if app == "officer" else staff()):
                     return
                 if not isinstance(val, dict) or len(json.dumps(val)) > 500_000:
                     return self.fail(400, "Bad field settings")
@@ -908,7 +963,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if on and (not frm or not host):
                 return self.fail(400, "To turn email on, enter the sender address and the mail server.")
             mm = S["mail"]
-            mm.update(on=on, selfOn=bool(b.get("selfOn")), **{"from": frm}, name=str(b.get("name") or "").strip()[:100], host=host,
+            mm.update(on=on, selfOn=bool(b.get("selfOn", mm.get("selfOn"))), **{"from": frm}, name=str(b.get("name") or "").strip()[:100], host=host,
                       port=port, sec=sec, user=str(b.get("user") or "").strip()[:200])
             if b.get("pass"):
                 mm["pass"] = str(b["pass"])[:500]
@@ -927,7 +982,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             save()
             audit("mail-settings", s["u"], on=on, sender=frm, host=host)
             return self.json(200, {"ok": True, "mailOn": mail_on(), "from": frm, "passSet": bool(mm.get("pass")),
-                                   "selfOn": mail_on() and bool(mm.get("selfOn"))})
+                                   "selfOn": self_on()})
 
         if p == "forms" and m == "POST":
             if not staff():
@@ -1001,6 +1056,8 @@ def main():
     ap.add_argument("--lan", action="store_true", help="allow other devices on the network (use with --https)")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--reset-users", action="store_true")
+    ap.add_argument("--new-ca", action="store_true",
+                    help="replace the certificate authority with one limited to this server (devices must install it again)")
     a = ap.parse_args()
 
     if a.reset_users:
@@ -1020,7 +1077,10 @@ def main():
     httpd = http.server.ThreadingHTTPServer(("0.0.0.0" if a.lan else "127.0.0.1", port), Handler)
     if a.https:
         import tpd_server
-        tpd_server.make_cert()
+        tpd_server.make_cert(new_ca=a.new_ca)
+        if tpd_server.CERT_FILE.startswith(tpd_server.CERT_DIR) and not tpd_server.ca_is_limited():
+            print("\nNOTE: this server's certificate authority is the older kind that can vouch for ANY website.\n"
+                  "      Start once with --new-ca to replace it, then install the new certificate on each device.\n")
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(tpd_server.CERT_FILE, tpd_server.KEY_FILE)
         httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
