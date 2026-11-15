@@ -29,6 +29,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import smtplib
 import base64
 from email.message import EmailMessage
@@ -39,7 +40,7 @@ import threading
 import time
 import uuid
 import webbrowser
-from urllib.parse import urlsplit, parse_qs, unquote
+from urllib.parse import urlsplit, parse_qs, unquote, quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -49,6 +50,10 @@ APPS = {"kiosk": os.path.join(ROOT, "kiosk"), "officer": os.path.join(ROOT, "off
 CLIENT_JS = os.path.join(ROOT, "client.js")
 DATA = os.path.abspath(os.environ.get("DATA_DIR") or os.path.join(ROOT, "data"))
 FORMS = os.path.join(DATA, "forms")
+SAVED = os.path.join(DATA, "saved")      # completed forms kept for the retention period
+SAVED_MAX_BYTES = 20 * 1024**3          # stop saving if the folder ever reaches 20 GB
+KEEP_DAYS = [7, 14, 30, 60, 90, 180, 365, 730, 1095, 0]   # 0 = keep until an admin deletes them
+KEEP_DEFAULT = {"on": False, "days": 30, "kiosk": True, "officer": True, "see": "all"}
 SF = os.path.join(DATA, "state.json")
 SERVER_VERSION = "1"
 
@@ -68,6 +73,7 @@ try:
 except Exception:
     pass
 S["mail"] = {**MAIL_DEFAULT, **(S.get("mail") or {})}
+S["keep"] = {**KEEP_DEFAULT, **(S.get("keep") or {})}
 if not S.get("selfMig"):  # one time: the old admin screen had no switch and always stored "off"
     S["mail"]["selfOn"] = True
     S["selfMig"] = 1
@@ -153,6 +159,58 @@ def audit(ev, who, **x):
         pass
 
 
+# ---------- saved (completed) forms ----------
+SAVED_IDX = {}   # id -> meta
+
+
+def saved_load():
+    os.makedirs(SAVED, exist_ok=True)
+    for d in os.listdir(SAVED):
+        try:
+            with open(os.path.join(SAVED, d, "meta.json"), encoding="utf-8") as f:
+                m = json.load(f)
+            if m.get("id") == d:
+                SAVED_IDX[d] = m
+        except Exception:
+            pass
+
+
+def saved_bytes():
+    return sum(m.get("size", 0) for m in SAVED_IDX.values())
+
+
+def saved_delete(sid, who, why):
+    m = SAVED_IDX.pop(sid, None)
+    shutil.rmtree(os.path.join(SAVED, sid), ignore_errors=True)
+    if m:
+        audit("saved-deleted", who, id=sid, form=m.get("form"), saved=m.get("ts"), why=why)
+
+
+def saved_purge():
+    days = int(S["keep"].get("days") or 0)
+    if days <= 0:
+        return
+    cut = now_ms() - days * 86400_000
+    for sid in [k for k, m in SAVED_IDX.items() if m.get("ts", 0) < cut]:
+        saved_delete(sid, "system", "retention %d days" % days)
+
+
+def saved_visible(m, s):
+    if not s:
+        return False
+    if s["role"] in ("admin", "staff") or S["keep"].get("see") != "own":
+        return True
+    return m.get("by") == s["u"]
+
+
+def saved_pub(m):
+    days = int(S["keep"].get("days") or 0)
+    out = {k: m.get(k) for k in ("id", "ts", "app", "form", "lang", "by", "dt", "tm", "pn", "officers")}
+    out["files"] = [f["name"] for f in m.get("files", [])]
+    out["expires"] = m["ts"] + days * 86400_000 if days > 0 else None
+    return out
+
+
 # ---------- app versions (change automatically when files change) ----------
 _ver_cache = {}
 
@@ -203,7 +261,7 @@ def patch_index(app, text):
     text = text.replace('<option value="staff">Staff</option><option value="admin">Admin</option>',
                         '<option value="staff">Staff</option><option value="officer">Officer (officer app only)</option>'
                         '<option value="admin">Admin</option>', 1)
-    text = text.replace("a.innerHTML=`${acctHtml()}", "a.innerHTML=`${acctHtml()}${pdMailCard()}", 1)
+    text = text.replace("a.innerHTML=`${acctHtml()}", "a.innerHTML=`${acctHtml()}${pdMailCard()}${pdKeepCard()}", 1)
     text = text.replace("<button class=\"big\" onclick=\"printIt()\">${touchDev?'\U0001f5a8\ufe0f Print / Share':'\U0001f5a8\ufe0f Print'}</button>"
                         '<button class="big" onclick="emailIt()">\u2709\ufe0f Email officer</button>',
                         "${pdDoneBtns(touchDev)}${pdSelfBtn()}", 1)
@@ -316,9 +374,17 @@ def sess_idle(s):
 
 
 def janitor():
+    k = 0
     while True:
         time.sleep(60)
         n = time.time()
+        k += 1
+        if k % 10 == 1:
+            with LOCK:
+                try:
+                    saved_purge()
+                except Exception as x:
+                    print("Saved-forms clean-up error:", repr(x))
         with LOCK:
             for k in [k for k, s in SESS.items() if n - s["last"] > sess_idle(s) or n - s["created"] > MAXAGE]:
                 SESS.pop(k, None)
@@ -482,12 +548,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             u = urlsplit(self.path)
             p = unquote(u.path)
             if p.startswith("/api/"):
-                self.pre_read(40_000_000 if p in ("/api/relay", "/api/email") else
+                self.pre_read(40_000_000 if p in ("/api/relay", "/api/email", "/api/saved") else
                               25_000_000 if p.startswith("/api/forms") else 2_000_000)
             if p == "/api/relay":
                 return self.api_relay()
             if p in ("/api/email", "/api/mail/test") and self.command == "POST":
                 return self.api_send(p[5:])
+            if re.fullmatch(r"/api/saved/[0-9a-f]{32}/email", p) and self.command == "POST":
+                return self.api_saved_email(p.split("/")[3])
             if p.startswith("/api/"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 with LOCK:
@@ -637,6 +705,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 msg = "The mail server rejected the username or password."
             return self.fail(502, "The email could not be sent: " + msg[:200])
 
+    def api_saved_email(self, sid):
+        try:
+            if self.headers.get("x-pd") != "1":
+                return self.fail(403, "Bad request")
+            with LOCK:
+                s = self.get_sess()
+                m = SAVED_IDX.get(sid)
+                if not s:
+                    return self.fail(401, "Please sign in")
+                if not m or not saved_visible(m, s):
+                    return self.fail(404, "That saved form is no longer available.")
+                if not mail_on():
+                    return self.fail(501, "Email is not set up on the server.")
+                if limited("savedmail:" + s["u"], 20, 600):
+                    return self.fail(429, "Too many emails. Try again later.")
+                b = self.read_json()
+                ids = b.get("to") if isinstance(b.get("to"), list) else []
+                offs = [o for o in S["officers"] if o.get("id") in ids and o.get("email")]
+                if not offs:
+                    return self.fail(400, "Pick at least one officer with an email address.")
+                files = []
+                for i, f in enumerate(m.get("files", [])):
+                    with open(os.path.join(SAVED, sid, "%d.pdf" % i), "rb") as fh:
+                        files.append((f["name"], fh.read()))
+                subject = "Saved form: %s (%s)" % (m.get("form") or "form", m.get("dt") or "")
+                text = 'Saved form "%s" dated %s %s, sent from the TPD saved forms by %s.' % (
+                    m.get("form"), m.get("dt") or "", m.get("tm") or "", s["u"])
+                to = [o["email"] for o in offs]
+            send_mail(to, "", subject, text, files)
+            with LOCK:
+                audit("saved-emailed", s["u"], id=sid, form=m.get("form"), to=to)
+            return self.json(200, {"ok": True})
+        except HttpError as e:
+            return self.fail(e.code, e.msg)
+        except Exception as x:
+            msg = str(x)
+            if isinstance(x, smtplib.SMTPAuthenticationError):
+                msg = "The mail server rejected the username or password."
+            return self.fail(502, "The email could not be sent: " + msg[:200])
+
     # ---------- mail endpoint for the GitHub (standalone) apps ----------
     def relay_origin(self):
         o = (self.headers.get("origin") or "").rstrip("/")
@@ -780,7 +888,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                    "ver": app_version(app), "officers": S["officers"], "cc": S["cc"],
                    "kinds": S["kinds"].get(app, {}), "forms": form_list(),
                    "mailOn": mail_on(), "mailFrom": S["mail"]["from"] if mail_on() else "",
-                   "selfOn": self_on()}
+                   "selfOn": self_on(),
+                   "keep": {"on": bool(S["keep"]["on"] and S["keep"].get(app)), "days": S["keep"]["days"],
+                            "any": bool(SAVED_IDX) or bool(S["keep"]["on"])}}
             if app == "officer":
                 out["gmkey"] = S.get("gmkey", "")
             if s and s["role"] == "admin":
@@ -984,6 +1094,101 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(200, {"ok": True, "mailOn": mail_on(), "from": frm, "passSet": bool(mm.get("pass")),
                                    "selfOn": self_on()})
 
+        # ----- saved (completed) forms -----
+        if p == "keep" and m == "GET":
+            if not admin():
+                return
+            return self.json(200, {**S["keep"], "options": KEEP_DAYS, "count": len(SAVED_IDX),
+                                   "bytes": saved_bytes()})
+
+        if p == "keep" and m == "PUT":
+            if not admin():
+                return
+            b = self.read_json()
+            try:
+                days = int(b.get("days"))
+            except Exception:
+                return self.fail(400, "Pick how long to keep forms.")
+            if days not in KEEP_DAYS:
+                return self.fail(400, "Pick one of the listed retention periods.")
+            old = dict(S["keep"])
+            S["keep"].update(on=bool(b.get("on")), days=days, kiosk=bool(b.get("kiosk")),
+                             officer=bool(b.get("officer")), see="own" if b.get("see") == "own" else "all")
+            save()
+            audit("keep-settings", s["u"], old=old, new=S["keep"])
+            saved_purge()  # a shorter period takes effect right away
+            return self.json(200, {"ok": True, **S["keep"], "count": len(SAVED_IDX), "bytes": saved_bytes()})
+
+        if p == "saved" and m == "POST":
+            kp = S["keep"]
+            if not kp["on"] or not kp.get(app) or (app == "officer" and not s):
+                return self.json(200, {"ok": True, "saved": False})
+            who = s["u"] if s else "kiosk"
+            if limited("saved:" + (who if s else self.ip()), 60 if s else 20, 3600) \
+                    or (not s and limited("saved-anon-all", 300, 86400)):
+                return self.fail(429, "Too many forms saved. Try again later.")
+            b = self.read_json(40_000_000)
+            cid = str(b.get("cid") or "")[:64]
+            if cid and any(x.get("cid") == cid and x.get("app") == app for x in SAVED_IDX.values()):
+                return self.json(200, {"ok": True, "saved": True, "dup": True})
+            files = self.pdf_files(b)
+            size = sum(len(d) for _, d in files)
+            if saved_bytes() + size > SAVED_MAX_BYTES:
+                audit("saved-full", who, form=str(b.get("name"))[:120])
+                return self.fail(507, "The server's saved-forms folder is full. Tell an admin.")
+            sid = uuid.uuid4().hex
+            txt = lambda k, n=120: re.sub(r"[\x00-\x1f]+", " ", str(b.get(k) or "")).strip()[:n]
+            meta = {"id": sid, "cid": cid, "ts": now_ms(), "app": app, "form": txt("name") or "form",
+                    "lang": "pt" if b.get("lang") == "pt" else "en", "by": who, "dt": txt("dt", 20),
+                    "tm": txt("tm", 20), "pn": txt("pn"),
+                    "officers": [re.sub(r"[\x00-\x1f]+", " ", str(x))[:100] for x in (b.get("officers") or [])[:20]],
+                    "files": [{"name": n, "size": len(d)} for n, d in files], "size": size, "ip": self.ip()}
+            d = os.path.join(SAVED, sid)
+            os.makedirs(d)
+            for i, (_, data) in enumerate(files):
+                with open(os.path.join(d, "%d.pdf" % i), "wb") as fh:
+                    fh.write(data)
+            with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+                json.dump(meta, fh)
+            SAVED_IDX[sid] = meta
+            audit("saved", who, id=sid, form=meta["form"], app=app, ip=self.ip())
+            return self.json(200, {"ok": True, "saved": True})
+
+        if p == "saved" and m == "GET":
+            if not need():
+                return
+            items = sorted((saved_pub(x) for x in SAVED_IDX.values() if saved_visible(x, s)),
+                           key=lambda x: -x["ts"])
+            return self.json(200, {"items": items[:2000], "days": S["keep"]["days"], "on": S["keep"]["on"],
+                                   "see": S["keep"]["see"], "canDelete": s["role"] == "admin",
+                                   "canEmail": mail_on()})
+
+        mm_ = re.fullmatch(r"saved/([0-9a-f]{32})(?:/(\d))?", p)
+        if mm_ and m in ("GET", "HEAD", "DELETE"):
+            if not need():
+                return
+            sid, n = mm_.group(1), mm_.group(2)
+            meta = SAVED_IDX.get(sid)
+            if not meta or not saved_visible(meta, s):
+                return self.fail(404, "That saved form is no longer available.")
+            if m == "DELETE":
+                if not admin():
+                    return
+                saved_delete(sid, s["u"], "deleted by admin")
+                return self.json(200, {"ok": True})
+            i = int(n or 0)
+            if i >= len(meta["files"]):
+                return self.fail(404, "Not found")
+            with open(os.path.join(SAVED, sid, "%d.pdf" % i), "rb") as fh:
+                data = fh.read()
+            if m == "GET":
+                audit("saved-opened", s["u"], id=sid, form=meta.get("form"), file=meta["files"][i]["name"])
+            fn = meta["files"][i]["name"]
+            return self.send(200, data, "application/pdf", {
+                "Cache-Control": "no-store", "Content-Security-Policy": "sandbox",
+                "Content-Disposition": "inline; filename=\"%s\"; filename*=UTF-8''%s" % (
+                    re.sub(r'[^\x20-\x7e]|"', "_", fn), quote(fn))})
+
         if p == "forms" and m == "POST":
             if not staff():
                 return
@@ -1085,6 +1290,8 @@ def main():
         ctx.load_cert_chain(tpd_server.CERT_FILE, tpd_server.KEY_FILE)
         httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
         Handler.secure = True
+    saved_load()
+    saved_purge()
     threading.Thread(target=janitor, daemon=True).start()
 
     url = f"{'https' if a.https else 'http'}://localhost:{port}/"

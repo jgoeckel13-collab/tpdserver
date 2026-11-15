@@ -17,3 +17,16 @@ AFTER INSTALLING THIS UPDATE
    in central\officer\vendor\ocr\ . The app uses that copy when it is there.
 
 Never commit central\data or cert\ to GitHub (the .gitignore file now blocks them).
+
+SAVED FORMS (2026-11-15)
+- Staff setup (admin) > "Saved forms": turn on saving and pick how long to keep forms:
+  1 week, 2 weeks, 30 days, 60 days, 90 days, 6 months, 1, 2 or 3 years, or until an admin deletes them.
+  Choose whether kiosk forms, officer-app forms or both are saved, and whether officers see every saved
+  form or only the ones they completed (staff and admins always see all). It starts OFF.
+- Officer app home > "Saved forms": search, open, re-print, email to officers. Admins can delete.
+- Forms are deleted automatically when the period runs out (checked every 10 minutes and at start-up).
+  Shortening the period deletes older forms right away (you are asked first).
+- Copies live in central\data\saved and are backed up with the data folder. Every save, open, email and
+  delete is written to central\data\audit.log. Saving stops if that folder reaches 20 GB.
+- These are working copies. Keep the official copy in the records system, and keep the server's drive
+  encrypted (BitLocker), since saved forms contain personal details.

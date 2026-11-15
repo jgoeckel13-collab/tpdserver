@@ -31,7 +31,7 @@ function pdPush(k,v){if(!PD_SYNC[k]||!session||PDC.offline)return;pdQ[k]=v;clear
 async function pdFlush(){const q=pdQ;pdQ={};for(const k in q){try{const r=await pdApi('PUT','settings',{app:APP,key:k,value:q[k]});PDC.rev=r.rev}catch(x){pdNote('Not saved to the server: '+x.message,true)}}}
 
 function pdApply(st){
- PDC.rev=st.rev;PDC.ver=st.ver;canEmail=!!st.mailOn;PDC.from=st.mailFrom||'';PDC.selfOn=!!st.selfOn;
+ PDC.rev=st.rev;PDC.ver=st.ver;canEmail=!!st.mailOn;PDC.keep=st.keep||null;PDC.from=st.mailFrom||'';PDC.selfOn=!!st.selfOn;
  officers=Array.isArray(st.officers)?st.officers:[];cc=st.cc||'';kindOv=st.kinds||{};
  pdRaw('officers',officers);pdRaw('cc',cc);pdRaw('kinds',kindOv);if('gmkey'in st)pdRaw('gmkey',st.gmkey||'');
  const s=st.session;
@@ -154,3 +154,63 @@ setInterval(async()=>{if(document.hidden)return;const home=view==='home';
   if(PDC.rev!==null&&v.rev!==PDC.rev&&home)await pdRefresh()}
  catch(x){if(x.status===401&&APP==='officer'){pdSigned(0);if(home)location.href='login';else pdNote('Your sign-in expired. Finish this form, then sign in again.',true)}else if(!x.status)pdOffline(true)}},45000);
 /* ==== end TPD Central ==== */
+
+/* ==== Saved forms: a copy of each completed form kept on the server for the period an admin picks ==== */
+const pdSleep=ms=>new Promise(r=>setTimeout(r,ms));
+const pdFn=(r,en)=>String(r.name||'form').replace(/[^\p{L}\p{N}\- ]+/gu,'_').trim()+(en?'_English_copy_':'_')+(r.dt||'')+'.pdf';
+async function pdKeepSave(r){
+ if(!r||r._kept||!PDC.keep||!PDC.keep.on)return;r._kept=1;
+ if(PDC.offline){if(APP==='officer')pdNote('Offline: this form was not saved on the server.',true);return}
+ await pdSleep(800);for(let i=0;i<120&&r.en&&r.en.state==='working';i++)await pdSleep(1000); /* wait for the English copy */
+ if(!r._aid)r._aid=r.rid||('k'+Date.now().toString(36)+Math.random().toString(36).slice(2,8));
+ const cs=(r.copies||[]).filter(c=>c&&c.bytes);if(!cs.length)return;
+ try{await pdApi('POST','saved?app='+APP,{cid:r._aid,name:r.name,lang:r.lang,dt:r.dt,tm:r.tm,pn:r.pn||'',
+   officers:(r.sel||[]).map(o=>o.name),pdfs:cs.slice(0,3).map(c=>({filename:pdFn(r,c.key==='en'),pdf:toB64(new Uint8Array(c.bytes))}))})}
+ catch(x){r._kept=0;if(APP==='officer')pdNote('Not saved on the server: '+x.message,true);else console.warn('save failed',x)}}
+{const _go=go;go=function(v){const r=result;const o=_go.apply(this,arguments);if(v==='done'&&r)pdKeepSave(r);return o}}
+
+const PD_DAYS={7:'1 week',14:'2 weeks',30:'30 days',60:'60 days',90:'90 days',180:'6 months',365:'1 year',730:'2 years',1095:'3 years',0:'Until an admin deletes them'};
+const pdDate=ms=>new Date(ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+const pdSize=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.ceil(b/1024)+' KB';
+function pdKeepCard(){if(!session||session.role!=='admin'||PDC.offline)return'';setTimeout(pdKeepLoad,0);
+ return`<div class="card" id="pdKeep"><h3 style="margin-top:0">🗄️ Saved forms</h3>
+ <p class="mut">Keeps a copy of each completed form on this server so it can be opened, printed or emailed again later. Copies are deleted automatically when the time below runs out. The official copy should still go into the records system.</p>
+ <label class="chk"><input type="checkbox" id="kOn"> Save completed forms on the server</label>
+ <label>Keep saved forms for</label><select id="kDays"></select>
+ <label class="chk"><input type="checkbox" id="kKiosk"> Save forms from the lobby kiosk</label>
+ <label class="chk"><input type="checkbox" id="kOff"> Save forms from the officer app</label>
+ <label>Who can see saved forms</label><select id="kSee"><option value="all">Everyone who signs in</option><option value="own">Officers see only forms they completed (staff and admins see all)</option></select>
+ <p class="mut" id="kStat"></p>
+ <div class="row"><button onclick="pdKeepSet()">Save settings</button><button class="alt" onclick="go('saved')">Open saved forms</button></div><p id="kMsg" class="mut"></p></div>`}
+function pdKeepShow(k){$('#kOn').checked=!!k.on;$('#kKiosk').checked=!!k.kiosk;$('#kOff').checked=!!k.officer;$('#kSee').value=k.see==='own'?'own':'all';
+ $('#kDays').innerHTML=(k.options||[7,14,30,60,90,180,365,730,1095,0]).map(d=>`<option value="${d}"${d===k.days?' selected':''}>${PD_DAYS[d]||d+' days'}</option>`).join('');
+ $('#kStat').textContent=k.count+' form'+(k.count===1?'':'s')+' saved now ('+pdSize(k.bytes||0)+').';$('#pdKeep')._k=k}
+async function pdKeepLoad(){const c=document.getElementById('pdKeep');if(!c||c._ld)return;c._ld=1;try{pdKeepShow(await pdApi('GET','keep'))}catch(x){$('#kMsg').textContent='Could not load: '+x.message}}
+async function pdKeepSet(){const old=($('#pdKeep')._k)||{},days=+$('#kDays').value,g=$('#kMsg');
+ if(old.count&&days&&(!old.days||days<old.days)&&!confirm('Saved forms older than '+PD_DAYS[days]+' will be deleted now. Continue?'))return;
+ g.textContent='Saving...';
+ try{const r=await pdApi('PUT','keep',{on:$('#kOn').checked,days,kiosk:$('#kKiosk').checked,officer:$('#kOff').checked,see:$('#kSee').value});
+  pdKeepShow({...old,...r});PDC.keep={on:!!(r.on&&r[APP]),days:r.days,any:!!(r.on||r.count)};g.textContent='Saved.'}catch(x){g.textContent=x.message}}
+
+/* Saved forms screen */
+let pdSv=null;
+function pdSavedHome(){if(view!=='home'||APP!=='officer'||PDC.offline||!PDC.keep||!PDC.keep.any)return;const a=$('#app');if(!a||a.querySelector('#pdSvBtn'))return;
+ a.insertAdjacentHTML('beforeend',`<div class="card" id="pdSvBtn" style="margin-top:16px;text-align:center"><button class="big" onclick="go('saved')">🗄️ Saved forms</button>
+ <p class="mut" style="margin:6px 0 0">${PDC.keep.days?'Completed forms are kept on the server for '+PD_DAYS[PDC.keep.days]+'.':'Completed forms are kept on the server.'}</p></div>`)}
+function pdSavedRender(){const back=APP==='officer'?'home':'admin';
+ $('#app').innerHTML=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h3 style="margin:0">🗄️ Saved forms</h3><button class="alt sm" onclick="go('${back}')">‹ Back</button></div>
+ <p class="mut" id="svInfo">Loading...</p><input id="svQ" placeholder="Search by form, name, officer or date" oninput="pdSavedList()" autocomplete="off"><div id="svList"></div></div>`;pdSavedLoad()}
+async function pdSavedLoad(){try{pdSv=await pdApi('GET','saved?app='+APP);pdSavedList()}catch(x){if(x.status===401&&APP==='officer')return location.href='login';$('#svInfo').textContent=x.message}}
+function pdSavedList(){const L=$('#svList'),I=$('#svInfo');if(!L||!pdSv)return;const q=($('#svQ').value||'').toLowerCase().trim();
+ const it=pdSv.items.filter(x=>!q||[x.form,x.pn,x.by,x.dt,x.tm,(x.officers||[]).join(' '),pdDate(x.ts)].join(' ').toLowerCase().includes(q));
+ I.textContent=(pdSv.days?'Forms are deleted automatically '+PD_DAYS[pdSv.days]+' after they are saved.':'Forms are kept until an admin deletes them.')+(pdSv.see==='own'&&session&&session.role==='officer'?' You see the forms you completed.':'')+' '+it.length+' shown.';
+ L.innerHTML=it.length?it.map(x=>`<div style="border-top:1px solid var(--bd);padding:10px 0">
+ <b>${e(x.form)}</b> <span class="mut">${e(x.dt||'')} ${e(x.tm||'')}</span><br>
+ <small class="mut">${x.pn?'Name: '+e(x.pn)+' · ':''}${x.by==='kiosk'?'Lobby kiosk':'By '+e(x.by)}${x.officers&&x.officers.length?' · Officer: '+e(x.officers.join(', ')):''} · Saved ${pdDate(x.ts)} · ${x.expires?'Deleted '+pdDate(x.expires):'Kept until deleted'}</small>
+ <div class="row" style="gap:6px;margin-top:6px">${x.files.map((f,i)=>`<button class="alt sm" onclick="window.open('../api/saved/${x.id}/${i}','_blank')">📄 ${i?'English copy':'Open'}</button>`).join('')}${pdSv.canEmail?`<button class="alt sm" onclick="pdSavedMail('${x.id}')">✉️ Email</button>`:''}${pdSv.canDelete?`<button class="alt sm" onclick="pdSavedDel('${x.id}')">🗑️ Delete</button>`:''}</div><div id="svm_${x.id}"></div></div>`).join(''):'<p class="mut">No saved forms'+(q?' match your search.':' yet.')+'</p>'}
+function pdSavedMail(id){const b=$('#svm_'+id);if(!b)return;if(b.innerHTML){b.innerHTML='';return}const offs=officers.filter(o=>o.email);
+ b.innerHTML=offs.length?`<div style="margin-top:6px">${offs.map(o=>`<label class="chk"><input type="checkbox" value="${e(o.id)}"> ${e(o.name)}</label>`).join('')}<button class="sm" onclick="pdSavedSend('${id}')">Send</button> <span class="mut" id="svs_${id}"></span></div>`:'<p class="mut">No officers have an email address.</p>'}
+async function pdSavedSend(id){const b=$('#svm_'+id),g=$('#svs_'+id),to=[...b.querySelectorAll('input:checked')].map(i=>i.value);if(!to.length)return g.textContent='Pick an officer.';
+ g.textContent='Sending...';try{await pdApi('POST','saved/'+id+'/email',{to});g.textContent='✓ Sent.'}catch(x){g.textContent=x.message}}
+async function pdSavedDel(id){if(!confirm('Delete this saved form from the server? This cannot be undone.'))return;try{await pdApi('DELETE','saved/'+id);pdSv.items=pdSv.items.filter(x=>x.id!==id);pdSavedList()}catch(x){pdNote(x.message,true)}}
+{const _r=render;render=function(){if(view==='saved'&&!PDC.locked){pdSavedRender();return}const o=_r.apply(this,arguments);pdSavedHome();return o}}
