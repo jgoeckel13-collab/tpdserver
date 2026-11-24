@@ -31,7 +31,9 @@ function pdPush(k,v){if(!PD_SYNC[k]||!session||PDC.offline)return;pdQ[k]=v;clear
 async function pdFlush(){const q=pdQ;pdQ={};for(const k in q){try{const r=await pdApi('PUT','settings',{app:APP,key:k,value:q[k]});PDC.rev=r.rev}catch(x){pdNote('Not saved to the server: '+x.message,true)}}}
 
 function pdApply(st){
- PDC.rev=st.rev;PDC.ver=st.ver;canEmail=!!st.mailOn;PDC.keep=st.keep||null;PDC.from=st.mailFrom||'';PDC.selfOn=!!st.selfOn;
+ PDC.rev=st.rev;PDC.ver=st.ver;PDC.kiosk=st.kioskDevice||'';
+ /* lobby kiosk: visitors can only email or save forms from a device staff registered as a kiosk */
+ const okDev=APP!=='kiosk'||!!st.session||!!PDC.kiosk;canEmail=!!st.mailOn&&okDev;PDC.keep=st.keep||null;PDC.from=st.mailFrom||'';PDC.selfOn=!!st.selfOn&&okDev;
  officers=Array.isArray(st.officers)?st.officers:[];cc=st.cc||'';kindOv=st.kinds||{};
  pdRaw('officers',officers);pdRaw('cc',cc);pdRaw('kinds',kindOv);if('gmkey'in st)pdRaw('gmkey',st.gmkey||'');
  const s=st.session;
@@ -124,7 +126,7 @@ function pdPrint(){const cs=selCopies();if(!cs.length)return needCopy();
  if(g){g.style.color='';g.textContent=pdT2('Sending to the officer...','Enviando ao policial...')}
  const both=cs.length>1,subject='Completed form: '+dispName()+' ('+result.dt+')'+(cs.some(c=>c.key==='en')?' - English copy':''),
   text='Completed form "'+dispName()+'" dated '+result.dt+'.'+(both?' Attached: the Portuguese original and the English copy.':' The PDF is attached.');
- pdApi('POST','email',{to:offs.map(o=>o.id),subject,text,pdfs:cs.map(c=>({filename:cName(c),pdf:toB64(c.bytes)}))})
+ pdApi('POST','email',{to:offs.map(o=>o.id),name:dispName(),dt:result.dt,subject,text,pdfs:cs.map(c=>({filename:cName(c),pdf:toB64(c.bytes)}))})
   .then(()=>{result._sentKey=key;const h=$('#pdPs');if(h){h.style.color='#0a8f4a';h.textContent=pdT2('✓ Sent to ','✓ Enviado para ')+offs.map(o=>o.name).join(', ')}})
   .catch(x=>{const h=$('#pdPs');if(h){h.style.color='#c0392b';h.textContent=pdT2('Printed, but the email to the officer failed: ','Impresso, mas o e-mail ao policial falhou: ')+x.message+pdT2('. Please tell the front desk.','. Avise a recepção.')}})}
 
@@ -139,10 +141,11 @@ function pdSelfBtn(){if(!(canEmail&&!PDC.offline))return'';
   <p id="pdSm" style="min-height:1.2em;margin:4px 0 0;font-weight:600"></p></div>`}
 async function pdSelfMail(){const cs=selCopies();if(!cs.length)return needCopy();
  const inp=$('#pdSe'),msg=$('#pdSm'),b=$('#pdSo');if(!inp)return;const em=inp.value.trim();
+ if(APP==='kiosk'&&(result._selfN||0)>=2){msg.style.color='#c0392b';msg.textContent=pdT2('You already sent your copy. Ask at the front desk if you need another.','Você já enviou sua cópia. Peça na recepção se precisar de outra.');return}
  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)){msg.style.color='#c0392b';msg.textContent=pdT2('Enter a valid email address.','Digite um endereço de e-mail válido.');inp.focus();return}
  b.disabled=true;msg.style.color='';msg.textContent=pdT2('Sending...','Enviando...');
  try{await pdApi('POST','email',{self:em,app:APP,lang:LANG,name:dispName(),pdfs:selCopies().map(c=>({filename:cName(c),pdf:toB64(c.bytes)}))});
-  msg.style.color='#0a8f4a';msg.textContent=pdT2('Sent to ','Enviado para ')+em+pdT2('. Check your inbox (and junk folder).','. Verifique sua caixa de entrada (e a pasta de spam).');inp.value='';b.disabled=false}
+  result._selfN=(result._selfN||0)+1;msg.style.color='#0a8f4a';msg.textContent=pdT2('Sent to ','Enviado para ')+em+pdT2('. Check your inbox (and junk folder).','. Verifique sua caixa de entrada (e a pasta de spam).');inp.value='';b.disabled=false}
  catch(x){b.disabled=false;msg.style.color='#c0392b';msg.textContent=pdT2('Could not send: ','Não foi possível enviar: ')+x.message}}
 
 /* central updates: new app version or new shared data */
@@ -219,7 +222,18 @@ async function pdSavedDel(id){if(!confirm('Delete this saved form from the serve
 function acctHtml(){if(!session)return'';const adm=session.role==='admin';
  const mine=APP==='officer'?'':`<div class="card"><div class="li"><span>Signed in as <b>${e(session.u)}</b> (${e(session.role)})</span><button class="alt sm" onclick="logout()">Log out</button></div></div>
  <div class="card"><h3 style="margin-top:0">Change my password</h3><input type="hidden" id="ru" value="${e(session.u)}"><label>Your current password</label><input type="password" id="rpo" autocomplete="current-password"><label>New password (min 10 characters)</label><input type="password" id="rp" autocomplete="new-password"><div class="row"><button class="sm" onclick="resetPw()">Update password</button></div></div>`;
- return mine+(adm&&!PDC.offline?pdPeopleCard():'')+'<p id="amsg" style="color:#c0392b"></p>'}
+ return mine+(APP==='kiosk'&&!PDC.offline?pdDeviceCard():'')+(adm&&!PDC.offline?pdPeopleCard():'')+'<p id="amsg" style="color:#c0392b"></p>'}
+/* This device: register the lobby kiosk (visitors can email officers, get a copy and have forms saved only from a registered kiosk) */
+function pdDeviceCard(){const adm=session&&session.role==='admin';if(adm)setTimeout(pdKiosksLoad,0);
+ return`<div class="card" id="pdDev"><h3 style="margin-top:0">🖥️ This device</h3>
+ ${PDC.kiosk?`<p>✓ Registered as a lobby kiosk: <b>${e(PDC.kiosk)}</b>. Visitors here can email the officer, get a copy, and have forms saved.</p><div class="row"><button class="alt sm" onclick="pdKioskUnreg()">Unregister this device</button></div>`
+ :`<p><b>Not a registered kiosk.</b> Visitors using this device can print, but the server will not email or save their forms. Register only the lobby kiosk itself, not a personal computer.</p><label>Kiosk name</label><input type="text" id="kName" value="Lobby kiosk" maxlength="60"><div class="row"><button class="sm" onclick="pdKioskReg()">Register this device as a lobby kiosk</button></div>`}
+ ${adm?'<div id="kList" class="mut" style="margin-top:10px"></div>':''}</div>`}
+async function pdKioskReg(){try{const r=await pdApi('POST','kiosk/register',{name:$('#kName').value.trim()});PDC.kiosk=r.name;await pdRefresh();go('admin');pdNote('This device is now a registered kiosk.')}catch(x){pdNote(x.message,true)}}
+async function pdKioskUnreg(){if(!confirm('Unregister this device? Visitors here will no longer be able to email or save forms.'))return;try{await pdApi('POST','kiosk/unregister');PDC.kiosk='';await pdRefresh();go('admin')}catch(x){pdNote(x.message,true)}}
+async function pdKiosksLoad(){const b=document.getElementById('kList');if(!b)return;try{const l=(await pdApi('GET','kiosks')).kiosks;
+ b.innerHTML=l.length?'<b>All registered kiosks</b>'+l.map(k=>`<div class="li"><span>${e(k.name)}${k.here?' (this device)':''} <span class="mut">· added ${pdDate(k.created)} by ${e(k.by)} · last used ${pdDate(k.last||k.created)}</span></span>${k.here?'':`<button class="alt sm" onclick="pdKioskDel('${e(k.id)}')">Remove</button>`}</div>`).join(''):'No kiosks registered yet.'}catch(x){b.textContent=x.message}}
+async function pdKioskDel(id){if(!confirm('Remove this kiosk? It will stop sending and saving visitor forms.'))return;try{await pdApi('DELETE','kiosks/'+id);pdKiosksLoad()}catch(x){pdNote(x.message,true)}}
 const PD_ROLES=[['none','No sign-in'],['officer','Officer'],['staff','Staff'],['admin','Admin']];
 function pdPeopleCard(){setTimeout(pdPeopleLoad,0);
  return`<div class="card" id="pdPeople"><h3 style="margin-top:0">👥 People &amp; sign-in</h3>

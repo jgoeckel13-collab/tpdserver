@@ -1,3 +1,25 @@
+TPD Central - kiosk security update 2026-11-24 (server release 2026.11.24.2, kiosk app 20261124c)
+
+AFTER INSTALLING: on the lobby kiosk itself, open Staff setup, sign in, and under "This device" tap
+"Register this device as a lobby kiosk". Until you do, visitors there can still fill out and print forms,
+but the server will NOT email the officer, send visitor copies, or save their forms. Do this once per kiosk
+(and again if the kiosk's browser data is ever cleared). Admins can see and remove kiosks there too.
+
+1. Only a registered kiosk can send email or save forms for visitors. Any other device on the network
+   that isn't signed in is refused.
+2. Emails from the kiosk to officers are written by the server: "Completed form: <form name> (<date>)".
+   Only a real form name is used, so nobody can put their own words or a link into a message sent from
+   the TPD address. (Same for the GitHub apps' sending service.)
+3. Limits per kiosk: 12 visitor copies per 10 minutes, 3 per email address per hour, 300 emails a day;
+   each visitor can send themselves at most 2 copies.
+4. Wrong passwords now block that device for 5 minutes (for that username) instead of locking the
+   account everywhere, so nobody in the lobby can keep an officer locked out. A flood of 30 wrong
+   passwords from many devices still locks the account for 15 minutes.
+5. Kiosk privacy: answers are never kept on the kiosk for the next person (no "pick up where you left
+   off"), no Download button, and the visitor's email address is never put on the kiosk's clipboard.
+6. The app pages tell browsers not to show them inside other websites and to block plugins and
+   outside form posts.
+
 TPD Central - update 2026-11-24 (server release 2026.11.24, apps 20261124b)
 
 1. PEOPLE & SIGN-IN (Staff setup, admins only)

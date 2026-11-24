@@ -56,7 +56,7 @@ KEEP_DAYS = [7, 14, 30, 60, 90, 180, 365, 730, 1095, 0]   # 0 = keep until an ad
 KEEP_DEFAULT = {"on": False, "days": 30, "kiosk": True, "officer": True, "see": "all"}
 SF = os.path.join(DATA, "state.json")
 SERVER_VERSION = "1"
-SERVER_RELEASE = "2026.11.24"   # shown at the bottom of the apps; change it with each server update
+SERVER_RELEASE = "2026.11.24.2"   # shown at the bottom of the apps; change it with each server update
 SETUP_LINK_DAYS = 7               # how long a password setup link works
 PUBLIC_BASE = ""                  # address other devices use (set at start-up with --lan)
 
@@ -77,6 +77,7 @@ except Exception:
     pass
 S["mail"] = {**MAIL_DEFAULT, **(S.get("mail") or {})}
 S["keep"] = {**KEEP_DEFAULT, **(S.get("keep") or {})}
+S.setdefault("kiosks", [])   # registered lobby kiosk devices: [{id, name, hash, created, by, last}]
 if not S.get("selfMig"):  # one time: the old admin screen had no switch and always stored "off"
     S["mail"]["selfOn"] = True
     S["selfMig"] = 1
@@ -387,6 +388,65 @@ async function call(path,body){const r=await fetch('api/'+path,{method:'POST',he
  catch(x){b.innerHTML='<p>'+esc(x.message)+'</p><p class="n">Ask an admin to send you a new setup link.</p>'}})();</script></body></html>"""
 
 ROLE_NAMES = {"admin": "Admin", "staff": "Staff", "officer": "Officer"}
+KIOSK_COOKIE_DAYS = 730
+
+
+_KNOWN = {"t": 0, "names": set()}
+
+
+def known_forms():
+    """Names of every form the apps can send: built-in forms (read from the app files) and imported ones."""
+    if time.time() - _KNOWN["t"] > 60:
+        names = set()
+        for d in APPS.values():
+            try:
+                with open(os.path.join(d, "index.html"), encoding="utf-8") as f:
+                    names |= set(re.findall(r"\{name:'([^']{1,120})\.pdf',lang:", f.read()))
+            except OSError:
+                pass
+        _KNOWN.update(t=time.time(), names=names)
+    return _KNOWN["names"] | {re.sub(r"\.pdf$", "", f["name"], flags=re.I) for f in S["forms"]}
+
+
+def form_label(b):
+    """Form name for an email the server writes itself. Only a real form name is used, so nobody
+    can put their own words (or a link) in a message sent from the TPD address."""
+    n = str(b.get("name") or "")
+    if not n:
+        m = re.match(r"\s*Completed form:\s*(.*?)\s*\((?:\d|Portuguese)", str(b.get("subject") or ""))
+        n = m.group(1) if m else ""
+    n = n.strip()
+    k = known_forms()
+    if n in k:
+        return n
+    m = re.fullmatch(r"(.+?) \(Portuguese form: (.+)\)", n)  # Portuguese form shown with its English title
+    if m and m.group(2) in k:
+        return n
+    return "form"
+
+
+def form_date(b):
+    d = re.sub(r"[^0-9/\-]", "", str(b.get("dt") or ""))[:10]
+    return d
+
+
+def officer_mail(b, nfiles):
+    """Subject and text for a form sent to officers from the kiosk: written here, not by the sender."""
+    name, dt = form_label(b), form_date(b)
+    subject = "Completed form: " + name + (" (" + dt + ")" if dt else "") + (" - English copy" if nfiles > 1 else "")
+    text = ('Completed form "%s"%s from the lobby kiosk. %s\n\nThis message was sent automatically by the Tisbury PD apps.\n'
+            % (name, (" dated " + dt) if dt else "", "Attached: the Portuguese original and the English copy." if nfiles > 1 else "The PDF is attached."))
+    return subject, text
+
+
+LOGIN_FAILS = {}   # (ip, user) -> [times]  wrong passwords from one device
+
+
+def login_blocked(ip, u):
+    n = time.time()
+    a = [t for t in LOGIN_FAILS.get((ip, u.lower()), []) if n - t < 300]
+    LOGIN_FAILS[(ip, u.lower())] = a
+    return len(a) >= 5
 
 
 def token_hash(t):
@@ -461,6 +521,8 @@ def janitor():
                 SESS.pop(k, None)
             for k in [k for k, a in HITS.items() if not any(n - t < 600 for t in a)]:
                 HITS.pop(k, None)
+            for k in [k for k, a in LOGIN_FAILS.items() if not any(n - t < 300 for t in a)]:
+                LOGIN_FAILS.pop(k, None)
 
 
 ok_email_re = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -615,6 +677,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         s["role"] = u["role"]
         return s
 
+    def kiosk_dev(self):
+        """The registered lobby kiosk this request comes from, or None."""
+        t = self.cookies().get("pdkiosk")
+        if not t or len(t) > 100:
+            return None
+        h = token_hash(t)
+        k = next((k for k in S["kiosks"] if hmac.compare_digest(k["hash"], h)), None)
+        if k:
+            k["last"] = now_ms()
+        return k
+
+    def kiosk_cookie(self, val, age):
+        return f"pdkiosk={val}; HttpOnly; Path=/; SameSite=Strict; Max-Age={age}" + ("; Secure" if self.secure else "")
+
     def new_session(self, u, role, long=False):
         t = secrets.token_hex(32)
         n = time.time()
@@ -709,14 +785,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (FileNotFoundError, IsADirectoryError, PermissionError, NotADirectoryError):
             return self.send(404, b"Not found", "text/plain")
         ext = os.path.splitext(fp)[1].lower()
+        extra = {}
         if rel == "index.html":
             b = patch_index(app, b.decode("utf-8")).encode("utf-8")
             cc = "no-cache"
+            extra = {"Content-Security-Policy": "frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"}
         else:
             cc = "no-cache"
         if app == "officer":
             cc = "private, " + cc
-        self.send(200, b, MIME.get(ext, "application/octet-stream"), {"Cache-Control": cc})
+        self.send(200, b, MIME.get(ext, "application/octet-stream"), {"Cache-Control": cc, **extra})
 
     # ---------- sending email (runs outside the data lock; SMTP can be slow) ----------
     def api_send(self, p):
@@ -725,6 +803,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.fail(403, "Bad request")
             with LOCK:
                 s = self.get_sess()
+                kd = None if s else self.kiosk_dev()
+                if p == "email" and not s and not kd:
+                    return self.fail(403, "This device is not set up as a lobby kiosk. Ask staff (Staff setup > This device).")
                 if not mail_on() and p == "email":
                     return self.fail(501, "Email is not set up on the server.")
                 if not S["mail"].get("host") or not S["mail"].get("from"):
@@ -748,9 +829,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     to = str(b.get("self") or "").strip()
                     if len(to) > 200 or not re.match(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$", to):
                         return self.fail(400, "Enter a valid email address.")
-                    if limited("self:" + (s["u"] if officer_app else self.ip()), 30 if officer_app else 3, 600) \
+                    if limited("self:" + (s["u"] if officer_app else "kiosk:" + kd["id"] if kd else s["u"]), 30 if s else 12, 600) \
                             or limited("selfto:" + to.lower(), 3, 3600) \
-                            or (not officer_app and limited("anon-all", 40, 3600)):
+                            or (kd and limited("kioskday:" + kd["id"], 300, 86400)):
                         return self.fail(429, "Too many emails. Ask at the front desk.")
                     files = self.pdf_files(b)
                     pt = b.get("lang") == "pt"
@@ -764,20 +845,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "This is an automated message. Replies to this email are not received. "
                              "To contact the department, call or visit the front desk.\n"))
                     job = ([to], "", subject, body, files, True)
-                    who = s["u"] if officer_app else "visitor@" + self.ip()
+                    who = s["u"] if s else "visitor@kiosk:" + kd["name"]
                     p = "email-self"
                 else:
-                    if limited("mail:" + self.ip(), 10, 600) or (not s and limited("anon-all", 40, 3600)):
+                    if limited("mail:" + (s["u"] if s else "kiosk:" + kd["id"]), 30, 600) or (kd and limited("kioskday:" + kd["id"], 300, 86400)):
                         return self.fail(429, "Too many emails. Try again later.")
                     ids = b.get("to") if isinstance(b.get("to"), list) else []
                     offs = [o for o in S["officers"] if o.get("id") in ids and o.get("email")]
                     if not offs:
                         return self.fail(400, "The selected officer(s) have no email address.")
                     files = self.pdf_files(b)
-                    subject = re.sub(r"[\r\n]+", " ", str(b.get("subject") or "Completed form"))[:200]
-                    text = str(b.get("text") or "")[:4000]
+                    if s:  # signed-in staff/officers write their own subject and note
+                        subject = re.sub(r"[\r\n]+", " ", str(b.get("subject") or "Completed form"))[:200]
+                        text = str(b.get("text") or "")[:4000]
+                    else:  # lobby kiosk: the server writes the message, so nobody can send their own text from the TPD address
+                        subject, text = officer_mail(b, len(files))
                     job = ([o["email"] for o in offs], S["cc"], subject, text, files)
-                    who = s["u"] if s else self.ip()
+                    who = s["u"] if s else "kiosk:" + kd["name"]
             send_mail(*job)
             with LOCK:
                 audit({"email": "email", "email-self": "email-self"}.get(p, "mail-test"), who, to=job[0], cc=job[1],
@@ -888,8 +972,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if bad:
                         return self.relay_out(403, {"error": "Not an allowed officer address: " + ", ".join(bad)})
                     files = self.pdf_files(b)
-                    subject = re.sub(r"[\r\n]+", " ", str(b.get("subject") or "Completed form"))[:200]
-                    job = (to, S["cc"], subject, str(b.get("text") or "")[:4000], files)
+                    subject, text = officer_mail(b, len(files))
+                    job = (to, S["cc"], subject, text, files)
                 elif kind == "self":
                     if not mm.get("selfOn"):
                         return self.relay_out(403, {"error": "Email copies are turned off on the server."})
@@ -972,12 +1056,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == "state" and m == "GET":
             if app == "officer" and not s:
                 return self.fail(401, "Please sign in")
+            kd = self.kiosk_dev() if app == "kiosk" else None
             out = {"needSetup": not S["users"], "session": pub(s) if s else None, "rev": S["rev"],
+                   "kioskDevice": kd["name"] if kd else "",
                    "ver": app_version(app), "officers": S["officers"], "cc": S["cc"],
                    "kinds": S["kinds"].get(app, {}), "forms": form_list(),
                    "mailOn": mail_on(), "mailFrom": S["mail"]["from"] if mail_on() else "", "server": SERVER_RELEASE,
                    "selfOn": self_on(),
-                   "keep": {"on": bool(S["keep"]["on"] and S["keep"].get(app)), "days": S["keep"]["days"],
+                   "keep": {"on": bool(S["keep"]["on"] and S["keep"].get(app) and (app != "kiosk" or kd or s)), "days": S["keep"]["days"],
                             "any": bool(SAVED_IDX) or bool(S["keep"]["on"])}}
             if app == "officer":
                 out["gmkey"] = S.get("gmkey", "")
@@ -1011,18 +1097,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if r and not r.get("hash"):
                 hash_pw(pw, "0" * 32)
                 return self.fail(403, "This account has no password yet. Use the setup link from your admin.")
+            if login_blocked(self.ip(), u):
+                return self.fail(429, "Too many wrong passwords from this device. Try again in 5 minutes.")
             if r and r.get("lock", 0) > now_ms():
                 mins = -(-(r["lock"] - now_ms()) // 60000)
                 return self.fail(429, f"Too many attempts. Try again in {mins} min.")
             h = hash_pw(pw, r["salt"] if r else "0" * 32)
             if not r or not hmac.compare_digest(h, r["hash"]):
+                LOGIN_FAILS.setdefault((self.ip(), u.lower()), []).append(time.time())
                 if r:
+                    # only a flood of wrong passwords from many devices locks the account itself (15 minutes)
                     r["fails"] = r.get("fails", 0) + 1
-                    if r["fails"] >= 5:
-                        r["lock"], r["fails"] = now_ms() + 300_000, 0
+                    if r["fails"] >= 30:
+                        r["lock"], r["fails"] = now_ms() + 900_000, 0
                     save()
                 audit("login-failed", u, ip=self.ip())
                 return self.fail(401, "Incorrect username or password.")
+            LOGIN_FAILS.pop((self.ip(), u.lower()), None)
             r["fails"] = 0
             save()
             audit("login", r["u"], ip=self.ip(), app="officer" if b.get("long") else "kiosk")
@@ -1120,6 +1211,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
             save()
             audit("user-role", s["u"], user=u, role=role)
             return self.json(200, {"ok": True, "user": pub_admin(r)})
+
+        if p == "kiosk/register" and m == "POST":
+            # staff or an admin, on the lobby kiosk itself: mark this browser as a kiosk
+            if not staff():
+                return
+            name = re.sub(r"[\x00-\x1f<>]+", " ", str(self.read_json().get("name") or "")).strip()[:60] or "Lobby kiosk"
+            old = self.kiosk_dev()
+            if old:
+                S["kiosks"] = [k for k in S["kiosks"] if k["id"] != old["id"]]
+            tok = secrets.token_urlsafe(32)
+            k = {"id": uuid.uuid4().hex[:12], "name": name, "hash": token_hash(tok), "created": now_ms(), "by": s["u"], "last": now_ms()}
+            S["kiosks"].append(k)
+            save()
+            audit("kiosk-register", s["u"], kiosk=name, ip=self.ip())
+            return self.json(200, {"ok": True, "name": name}, {"Set-Cookie": self.kiosk_cookie(tok, KIOSK_COOKIE_DAYS * 86400)})
+
+        if p == "kiosk/unregister" and m == "POST":
+            if not staff():
+                return
+            k = self.kiosk_dev()
+            if k:
+                S["kiosks"] = [x for x in S["kiosks"] if x["id"] != k["id"]]
+                save()
+                audit("kiosk-unregister", s["u"], kiosk=k["name"])
+            return self.json(200, {"ok": True}, {"Set-Cookie": self.kiosk_cookie("", 0)})
+
+        if p == "kiosks" and m == "GET":
+            if not admin():
+                return
+            here = self.kiosk_dev()
+            return self.json(200, {"kiosks": [{"id": k["id"], "name": k["name"], "created": k["created"], "by": k["by"],
+                                               "last": k.get("last", 0), "here": bool(here and here["id"] == k["id"])} for k in S["kiosks"]]})
+
+        km = re.fullmatch(r"kiosks/([0-9a-f]{12})", p)
+        if km and m == "DELETE":
+            if not admin():
+                return
+            k = next((k for k in S["kiosks"] if k["id"] == km.group(1)), None)
+            if not k:
+                return self.fail(404, "Not found")
+            S["kiosks"] = [x for x in S["kiosks"] if x["id"] != k["id"]]
+            save()
+            audit("kiosk-remove", s["u"], kiosk=k["name"])
+            return self.json(200, {"ok": True})
 
         if p == "setpw/check" and m == "POST":
             if limited("setpw:" + self.ip(), 30, 600):
@@ -1308,9 +1443,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             kp = S["keep"]
             if not kp["on"] or not kp.get(app) or (app == "officer" and not s):
                 return self.json(200, {"ok": True, "saved": False})
+            kd = None if s else self.kiosk_dev()
+            if not s and not kd:
+                return self.fail(403, "This device is not set up as a lobby kiosk.")
             who = s["u"] if s else "kiosk"
-            if limited("saved:" + (who if s else self.ip()), 60 if s else 20, 3600) \
-                    or (not s and limited("saved-anon-all", 300, 86400)):
+            if limited("saved:" + (who if s else "kiosk:" + kd["id"]), 60, 3600) \
+                    or (kd and limited("saved-kday:" + kd["id"], 400, 86400)):
                 return self.fail(429, "Too many forms saved. Try again later.")
             b = self.read_json(40_000_000)
             cid = str(b.get("cid") or "")[:64]

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https:; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#1d4e89"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><title>Tisbury PD Visitor Self-Service</title>
 <script src="vendor/pdf-lib.min.js"></script>
 <script type="module">import*as P from "./vendor/pdf.min.mjs";window.pdfjsLib=P</script>
@@ -112,7 +113,7 @@ function render(){
  const tabs=enc?`<div class="seg" style="margin:10px 0 6px"><button class="pvt ${result.prev==='en'?'':'on'}" data-k="main" onclick="previewCopy('main')">Original</button><button class="pvt ${result.prev==='en'?'on':''}" data-k="en" onclick="previewCopy('en')">English</button></div>`:'';
  a.innerHTML=`<div class="card" style="text-align:center"><div class="check">✓</div><h2 style="margin:0 0 6px">Thank you — you’re all set</h2><p style="font-size:17px;margin:0 0 18px">Your form is complete. Please give it to the assisting officer, or print or email a copy.</p>${copiesUi}
  <div class="row" style="justify-content:center"><button class="big" onclick="printIt()">${touchDev?'🖨️ Print / Share':'🖨️ Print'}</button><button class="big" onclick="emailIt()">✉️ Email officer</button></div>
- <div class="row" style="justify-content:center;margin-top:14px"><button class="alt" onclick="dl()">Download</button><button class="alt" onclick="endVisit()">New visitor</button></div>
+ <div class="row" style="justify-content:center;margin-top:14px"><button class="alt" onclick="endVisit()">New visitor</button></div>
  <p class="mut" style="margin:14px 0 8px">${mailOn?'The signed PDF will be emailed to the assisting officer(s).':'Email opens the share sheet with the PDF attached; pick your mail app and the officer(s) listed in the note.'}</p>${tabs}
  ${/android/i.test(navigator.userAgent)?'<p class="mut">Preview is not available on this device. Use Print / Share to review the PDF.</p>':`<iframe id="pv" src="${prev.url}" style="height:45vh"></iframe>`}
  <p class="cd" id="cd"></p></div>`;startCd()}
@@ -491,7 +492,7 @@ async function emailIt(){const cs=selCopies();if(!cs.length)return needCopy();
  if(!result.sel.length&&officers.length){const s=await pickOfficers();if(s===null)return;result.sel=s}
  const em=result.sel.map(o=>o.email).filter(Boolean),to=em.join(', '),both=cs.length>1,ccs=(typeof cc!=='undefined'&&cc)?cc:'',
  subject='Completed form: '+dispName()+' ('+result.dt+')'+(cs.some(c=>c.key==='en')?' - English copy':''),body='Completed form "'+dispName()+'" dated '+result.dt+'.'+(both?' Attached: the Portuguese original and the English copy.':' The PDF is attached.');
- if(typeof canEmail!=='undefined'&&canEmail&&typeof api==='function'){try{await api('POST','email',{to:result.sel.map(o=>o.id),subject,text:body,pdfs:cs.map(c=>({filename:cName(c),pdf:toB64(c.bytes)}))});alert(LANG==='pt'?'E-mail enviado.':'Email sent.');return}catch(x){alert((LANG==='pt'?'Não foi possível enviar o e-mail: ':'Could not send the email: ')+x.message)}}
+ if(typeof canEmail!=='undefined'&&canEmail&&typeof api==='function'){try{await api('POST','email',{to:result.sel.map(o=>o.id),name:dispName(),dt:result.dt,subject,text:body,pdfs:cs.map(c=>({filename:cName(c),pdf:toB64(c.bytes)}))});alert(LANG==='pt'?'E-mail enviado.':'Email sent.');return}catch(x){alert((LANG==='pt'?'Não foi possível enviar o e-mail: ':'Could not send the email: ')+x.message)}}
  if(matchMedia('(pointer:coarse)').matches){try{await navigator.clipboard.writeText(to)}catch{}
   if(await sharePdf((to?'To: '+to+'\n':'')+(ccs?'CC: '+ccs+'\n':'')+subject+'\n'+body))return}
  else{try{const eml=mkEml(to,ccs,subject,body,cs.map(c=>({name:cName(c),bytes:c.bytes}))),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([eml],{type:'message/rfc822'}));a.download=baseName()+'_email.eml';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(a.href)},4000);
@@ -501,13 +502,13 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(
 /* ---- English / Português ---- */
 let LANG='en';
 /* ---- autosave of a form in progress (kept for 5 minutes after the last change) ---- */
-const DRAFT_KEY=NS+'draft',DRAFT_MS=300000;let values0='{}',lastDraftSig='',drT=null;
+const DRAFT_KEY=NS+'draft',DRAFT_MS=300000;try{localStorage.removeItem(NS+'draft')}catch{}let values0='{}',lastDraftSig='',drT=null;
 function getDraft(){try{const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');if(!d||!d.t||Date.now()-d.t>DRAFT_MS){if(d)localStorage.removeItem(DRAFT_KEY);return null}return d}catch{return null}}
 function clearDraft(){try{localStorage.removeItem(DRAFT_KEY)}catch{}lastDraftSig=''}
-function saveDraft(force){if(!cur||!(view==='fill'||view==='review'||view==='sign'))return;try{const sig=JSON.stringify(values);if(sig===values0||(!force&&sig===lastDraftSig))return;lastDraftSig=sig;localStorage.setItem(DRAFT_KEY,JSON.stringify({t:Date.now(),form:cur.name,lang:LANG,af,values}))}catch(x){}}
+function saveDraft(force){return; /* kiosk: answers are never saved for later (privacy) */if(!cur||!(view==='fill'||view==='review'||view==='sign'))return;try{const sig=JSON.stringify(values);if(sig===values0||(!force&&sig===lastDraftSig))return;lastDraftSig=sig;localStorage.setItem(DRAFT_KEY,JSON.stringify({t:Date.now(),form:cur.name,lang:LANG,af,values}))}catch(x){}}
 setInterval(()=>saveDraft(false),2000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)saveDraft(true)});addEventListener('pagehide',()=>saveDraft(true));
-function resumeBanner(){const d=getDraft(),i=d?forms.findIndex(f=>f.name===d.form):-1;if(i<0)return'';const n=Math.max(1,Math.ceil((d.t+DRAFT_MS-Date.now())/60000)),pt=d.lang==='pt',nm=e(d.form.replace(/\.pdf$/i,''));
+function resumeBanner(){return'';const d=getDraft(),i=d?forms.findIndex(f=>f.name===d.form):-1;if(i<0)return'';const n=Math.max(1,Math.ceil((d.t+DRAFT_MS-Date.now())/60000)),pt=d.lang==='pt',nm=e(d.form.replace(/\.pdf$/i,''));
  clearTimeout(drT);drT=setTimeout(()=>{if(view==='home')render()},Math.max(1000,d.t+DRAFT_MS-Date.now()+500));
  return`<div class="resume"><b>${pt?'Continuar de onde parou?':'Pick up where you left off?'}</b><p style="margin:6px 0 10px">${pt?'Você estava preenchendo “'+nm+'”. Suas respostas estão salvas por mais '+n+(n>1?' minutos.':' minuto.'):'You were filling out “'+nm+'”. Your answers are saved for '+n+' more minute'+(n>1?'s.':'.')}</p><div class="row" style="margin:0"><button onclick="resumeDraft()">${pt?'Continuar':'Resume'}</button><button class="alt" onclick="clearDraft();render()">${pt?'Começar de novo':'Start over'}</button></div></div>`}
 async function resumeDraft(){const d=getDraft();if(!d)return render();const i=forms.findIndex(f=>f.name===d.form);if(i<0)return render();if(d.lang&&d.lang!==LANG)setLang(d.lang);await openForm(i,d)}
@@ -573,7 +574,7 @@ function trTree(r,all){if(r.nodeType===3)return trText(r,all);const w=document.c
 new MutationObserver(ms=>{for(const m of ms)m.addedNodes.forEach(n=>trTree(n,false))}).observe(document.body,{childList:true,subtree:true});
 function setLang(l,home){LANG=l;document.documentElement.lang=l==='pt'?'pt-BR':'en';if(home)go('home');else render();trTree(document.body,true)}
 /* ---- app version: shown at the bottom of every screen, and a notice after an update ---- */
-const APP_VER='20261124b',APP_NOTES='The app version now shows at the bottom of the screen. Staff setup: pick who is an admin, staff or officer; each person sets their own password from a setup link.';
+const APP_VER='20261124c',APP_NOTES='Privacy and security update: a visitor\'s answers are never kept for the next person, no downloads stay on the kiosk, and only a registered kiosk can email or save visitor forms.';
 (function(){const el=document.createElement('p');el.id='appver';el.style.cssText='text-align:center;font-size:12px;color:var(--mut);margin:4px 0 18px';el.textContent='App version '+APP_VER;const mn=document.querySelector('main');if(mn)mn.after(el);
  let seen=null;try{seen=localStorage.getItem(NS+'seenVer');localStorage.setItem(NS+'seenVer',APP_VER)}catch{}
  if(!seen||seen===APP_VER)return;const b=document.createElement('div');b.id='updBanner';b.setAttribute('role','status');
