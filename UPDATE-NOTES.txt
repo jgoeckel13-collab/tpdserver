@@ -1,3 +1,28 @@
+TPD Central - update 2026-11-24 (server release 2026.11.24, apps 20261124b)
+
+1. PEOPLE & SIGN-IN (Staff setup, admins only)
+   - Every officer on the list has a menu: No sign-in / Officer / Staff / Admin.
+     Admin = everything, including this list and email settings. Staff = forms and officers in Staff setup.
+     Officer = the officer app only.
+   - Giving someone a sign-in creates a one-time setup link (works once, expires in 7 days). If server email
+     is on, it is emailed to the officer's address; you can also copy it and text or hand it to them.
+     They open it, see their username (from their email, e.g. jgoeckel) and choose their own password.
+     Admins never see or type anyone's password.
+   - "Send password reset link" gives someone who forgot their password a new link. An admin can no longer
+     type a new password for another person.
+   - "Someone not on the officer list" adds a sign-in for anyone else (e.g. a records clerk).
+   - Accounts made before this update keep working; they show under "Other sign-ins".
+   - Setup links only open on the department network. Start the server with "Start TPD Central (network)"
+     so links use the server's network address instead of localhost.
+   - You cannot change or remove your own admin role (so there is always at least one admin).
+2. VERSION NUMBERS: the bottom of every screen shows "App version 20261124b · Server 2026.11.24".
+   After an update each device shows "Updated to version ... (was ...)" with what's new, once.
+   When you update the server, change SERVER_RELEASE at the top of tpd_central.py.
+3. FIXED: one device that connected but stalled (Wi-Fi drop, port scan) could freeze the whole server in
+   HTTPS mode until it let go. The secure handshake now happens per connection with a 15-second limit.
+4. Officer app: Recent forms are deleted right at 24 hours (also in the background on installed Android
+   apps), plus a "Delete all now" button. The kiosk and officer apps match the GitHub versions (20261124b).
+
 TPD Central - security update (2026-11-10)
 
 AFTER INSTALLING THIS UPDATE

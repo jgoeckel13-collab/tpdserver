@@ -433,11 +433,18 @@ const RECENT_MS=24*3600*1000;let recent=[];
 const rdb=()=>new Promise((ok,no)=>{try{const q=indexedDB.open('pd_recent_'+APP,1);q.onupgradeneeded=()=>q.result.createObjectStore('f',{keyPath:'id'});q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)}catch(x){no(x)}});
 async function rtx(mode,fn){try{const d=await rdb();return await new Promise((ok,no)=>{const t=d.transaction('f',mode),r=fn(t.objectStore('f'));t.oncomplete=()=>{d.close();ok(r&&r.result)};t.onerror=()=>{d.close();no(t.error)}})}catch(x){console.warn(x)}}
 async function recentLoad(){if(APP!=='officer')return;const all=(await rtx('readonly',s=>s.getAll()))||[],now=Date.now(),dead=all.filter(x=>now-x.ts>=RECENT_MS);
- if(dead.length)await rtx('readwrite',s=>{dead.forEach(x=>s.delete(x.id))});recent=all.filter(x=>now-x.ts<RECENT_MS).sort((a,b)=>b.ts-a.ts);if(view==='home')render()}
+ if(dead.length)await rtx('readwrite',s=>{dead.forEach(x=>s.delete(x.id))});recent=all.filter(x=>now-x.ts<RECENT_MS).sort((a,b)=>b.ts-a.ts);
+ /* a form that just expired while it is open on the screen is closed too */
+ if(view==='done'&&result&&result.rid&&!recent.some(x=>x.id===result.rid)&&all.some(x=>x.id===result.rid))return endVisit();
+ /* run again the moment the next form reaches 24 hours */
+ clearTimeout(recentT);if(recent.length){const next=Math.min(...recent.map(x=>x.ts+RECENT_MS))-Date.now();recentT=setTimeout(recentLoad,Math.min(2147000000,Math.max(1000,next+500)))}
+ if(view==='home')render()}
+let recentT=null;
+async function recentDelAll(){if(!recent.length)return;if(!confirm('Delete all '+recent.length+' recent form'+(recent.length>1?'s':'')+' from this device now?'))return;await rtx('readwrite',s=>s.clear());recent=[];clearTimeout(recentT);if(view==='done'&&result&&result.rid)return endVisit();render()}
 async function recentSave(r){if(APP!=='officer'||!r)return;try{const m=r.copies.find(c=>c.key==='main'),en=r.copies.find(c=>c.key==='en');if(!m)return;if(!r.rid){r.rid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);r.rts=Date.now()}
  await rtx('readwrite',s=>s.put({id:r.rid,ts:r.rts,name:r.name,lang:r.lang,dt:r.dt,tm:r.tm,main:m.bytes,en:en?en.bytes:null}));await recentLoad()}catch(x){console.warn(x)}}
 function recentHtml(){if(APP!=='officer'||!recent.length)return'';const now=Date.now();
- return`<div class="card" style="margin-top:16px"><h3 style="margin-top:0">Recent forms <span class="mut" style="font-weight:400;font-size:14px">· kept on this device for 24 hours</span></h3>${recent.map(x=>{const left=Math.max(0,RECENT_MS-(now-x.ts)),h=Math.floor(left/3600000),m=Math.floor(left%3600000/60000);
+ return`<div class="card" style="margin-top:16px"><h3 style="margin-top:0">Recent forms <span class="mut" style="font-weight:400;font-size:14px">· kept on this device for 24 hours</span></h3><div class="row" style="margin:0 0 6px"><button class="alt sm" onclick="recentDelAll()">🗑 Delete all now</button></div>${recent.map(x=>{const left=Math.max(0,RECENT_MS-(now-x.ts)),h=Math.floor(left/3600000),m=Math.floor(left%3600000/60000);
  return`<div class="row" style="justify-content:space-between;align-items:center;margin:8px 0"><div><b>${e(x.lang==='pt'?enTitle(x.name):x.name)}</b>${x.lang==='pt'?' (PT)':''}<br><span class="mut">${e(new Date(x.ts).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))} · deleted in ${h}h ${m}m</span></div><div class="row"><button class="alt sm" onclick="recentOpen('${x.id}')">Open</button><button class="alt sm" onclick="recentDel('${x.id}')">Delete</button></div></div>`}).join('')}</div>`}
 function recentOpen(id){const x=recent.find(y=>y.id===id);if(!x)return;freeResult();const mk=b=>({bytes:b,url:URL.createObjectURL(new Blob([b],{type:'application/pdf'}))}),m=mk(x.main),copies=[{key:'main',...m}];if(x.en)copies.push({key:'en',...mk(x.en)});
  result={bytes:x.main,url:m.url,sel:[],dt:x.dt,tm:x.tm,pn:'',name:x.name,lang:x.lang,pick:{main:true,en:true},prev:'main',copies,en:x.en?{state:'ready'}:null,rid:x.id,rts:x.ts};cur={name:x.name+'.pdf',lang:x.lang};go('done')}
@@ -586,7 +593,11 @@ async function emailIt(){const cs=selCopies();if(!cs.length)return needCopy();
  else{try{const eml=mkEml(to,ccs,subject,body,cs.map(c=>({name:cName(c),bytes:c.bytes}))),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([eml],{type:'message/rfc822'}));a.download=baseName()+'_email.eml';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(a.href)},4000);
   alert('Your email draft was saved as a file. Open it (click it at the bottom of the browser or in Downloads) and it opens as a new message with the PDF attached'+(to?' and the officers in the To line.':'.'));return}catch(x){console.warn(x)}}
  await dl();location.href='mailto:'+em.join(',')+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body+'\n(Attach the downloaded PDF'+(both?'s':'')+'.)')+(ccs?'&cc='+encodeURIComponent(ccs):'')}
-if(APP==='officer'){recentLoad();setInterval(recentLoad,300000)}
+if(APP==='officer'){recentLoad();setInterval(recentLoad,300000);
+ /* timers pause while the phone sleeps: check again whenever the app comes back */
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)recentLoad()});addEventListener('pageshow',()=>recentLoad());
+ /* installed app on Android/Chrome: let the service worker delete expired forms even when the app is not opened */
+ if('serviceWorker' in navigator)navigator.serviceWorker.ready.then(async r=>{try{if(!r.periodicSync)return;const st=await navigator.permissions.query({name:'periodic-background-sync'});if(st.state==='granted')await r.periodicSync.register('purge-recent',{minInterval:3600000})}catch(x){}}).catch(()=>{})}
 if('serviceWorker' in navigator){const had=!!navigator.serviceWorker.controller;let rl=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(had&&!rl&&view==='home'){rl=true;location.reload()}});navigator.serviceWorker.register('sw.js').catch(()=>{})}
 /* ---- English / Português ---- */
 let LANG='en';
@@ -720,5 +731,13 @@ function trTree(r,all){if(r.nodeType===3)return trText(r,all);const w=document.c
 new MutationObserver(ms=>{for(const m of ms)m.addedNodes.forEach(n=>trTree(n,false))}).observe(document.body,{childList:true,subtree:true});
 function setLang(l,home){LANG=l;document.documentElement.lang=l==='pt'?'pt-BR':'en';if(home)go('home');else render();trTree(document.body,true)}
 {const sm=document.querySelector('header small');if(sm)sm.textContent='Officer Portal'}
+/* ---- app version: shown at the bottom of every screen, and a notice after an update ---- */
+const APP_VER='20261124b',APP_NOTES='The app version now shows at the bottom of the screen. Recent forms are deleted right at 24 hours, and there is a new Delete all now button.';
+(function(){const el=document.createElement('p');el.id='appver';el.style.cssText='text-align:center;font-size:12px;color:var(--mut);margin:4px 0 18px';el.textContent='App version '+APP_VER;const mn=document.querySelector('main');if(mn)mn.after(el);
+ let seen=null;try{seen=localStorage.getItem(NS+'seenVer');localStorage.setItem(NS+'seenVer',APP_VER)}catch{}
+ if(!seen||seen===APP_VER)return;const b=document.createElement('div');b.id='updBanner';b.setAttribute('role','status');
+ b.style.cssText='position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:99990;width:min(560px,92vw);box-sizing:border-box;background:#0a8f4a;color:#fff;border-radius:12px;padding:12px 16px;font:15px/1.4 system-ui,sans-serif;box-shadow:0 6px 22px rgba(0,0,0,.3)';
+ b.innerHTML='<b>✓ Updated to version '+e(APP_VER)+'</b> <span style="opacity:.85">(was '+e(seen)+')</span>'+(APP_NOTES?'<div style="margin-top:4px">'+e(APP_NOTES)+'</div>':'')+'<div style="text-align:right;margin-top:8px"><button class="sm" style="background:#fff;color:#0a8f4a">OK</button></div>';
+ b.querySelector('button').onclick=()=>b.remove();document.body.appendChild(b);setTimeout(()=>{try{b.remove()}catch{}},20000)})();
 dbAll().then(r=>{const bn=new Set(BUILTIN.map(x=>x.name));forms=[...builtinForms(),...r.filter(x=>!bn.has(x.name))];render()});render();
 </script></body></html>

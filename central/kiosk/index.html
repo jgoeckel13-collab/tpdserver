@@ -365,7 +365,12 @@ function touch(){clearTimeout(idleT);if(session)idleT=setTimeout(logout,300000)}
 let hid=0;document.addEventListener('visibilitychange',()=>{if(document.hidden)hid=Date.now();else if(session&&hid&&Date.now()-hid>120000)logout()});
 function logout(){session=null;editOff=-1;clearTimeout(idleT);go('home')}
 function setupHtml(){return`<div class="card"><h3 style="margin-top:0">Create admin account</h3><p class="mut">First-time setup. The admin manages staff logins, forms and officers.</p><label>Username</label><input type="text" id="au" autocapitalize="off" autocomplete="off"><label>Password (min 10 characters)</label><input type="password" id="ap"><label>Confirm password</label><input type="password" id="ap2"><p id="amsg" style="color:#c0392b"></p><div class="row"><button class="alt" onclick="go('home')">Cancel</button><button onclick="createAdmin()">Create admin</button></div></div>`}
+/* The first admin needs the department setup code. Only its hash is kept here. */
+const SETUP_SALT='0ec9b806a77c5fc95c9e6aee6a4f7935',SETUP_HASH='d97430165affd5a8f7c5958c5ee05c140e928e8076bb2e1f996c13502086818e';let setupFails=0,setupWait=0;
+async function setupCodeOk(c){const n=String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(n.length!==12)return false;try{return(await hashPw(n,SETUP_SALT)).hash===SETUP_HASH}catch{return false}}
 async function createAdmin(){if(users.length)return;const u=$('#au').value.trim(),p=$('#ap').value;
+ if(setupWait>Date.now())return say('Too many wrong setup codes. Try again in '+Math.ceil((setupWait-Date.now())/60000)+' min.');
+ if(!await setupCodeOk(($('#asc')||{}).value)){if(++setupFails>=5){setupFails=0;setupWait=Date.now()+600000}return say('That setup code is not correct.')}
  if(!u)return say('Enter a username.');if(p.length<10)return say('Password must be at least 10 characters.');if(p!==$('#ap2').value)return say('Passwords do not match.');
  try{users.push({u,role:'admin',...await hashPw(p),fails:0,lock:0})}catch{return say('A secure (HTTPS) connection is required.')}
  saveU();session={u,role:'admin'};touch();go('admin')}
@@ -567,5 +572,13 @@ function trText(n,all){const raw=n.data,cur=raw.trim();if(!cur)return;if(/^(admi
 function trTree(r,all){if(r.nodeType===3)return trText(r,all);const w=document.createTreeWalker(r,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode())trText(n,all)}
 new MutationObserver(ms=>{for(const m of ms)m.addedNodes.forEach(n=>trTree(n,false))}).observe(document.body,{childList:true,subtree:true});
 function setLang(l,home){LANG=l;document.documentElement.lang=l==='pt'?'pt-BR':'en';if(home)go('home');else render();trTree(document.body,true)}
+/* ---- app version: shown at the bottom of every screen, and a notice after an update ---- */
+const APP_VER='20261124b',APP_NOTES='The app version now shows at the bottom of the screen. Staff setup: pick who is an admin, staff or officer; each person sets their own password from a setup link.';
+(function(){const el=document.createElement('p');el.id='appver';el.style.cssText='text-align:center;font-size:12px;color:var(--mut);margin:4px 0 18px';el.textContent='App version '+APP_VER;const mn=document.querySelector('main');if(mn)mn.after(el);
+ let seen=null;try{seen=localStorage.getItem(NS+'seenVer');localStorage.setItem(NS+'seenVer',APP_VER)}catch{}
+ if(!seen||seen===APP_VER)return;const b=document.createElement('div');b.id='updBanner';b.setAttribute('role','status');
+ b.style.cssText='position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:99990;width:min(560px,92vw);box-sizing:border-box;background:#0a8f4a;color:#fff;border-radius:12px;padding:12px 16px;font:15px/1.4 system-ui,sans-serif;box-shadow:0 6px 22px rgba(0,0,0,.3)';
+ b.innerHTML='<b>✓ Updated to version '+e(APP_VER)+'</b> <span style="opacity:.85">(was '+e(seen)+')</span>'+(APP_NOTES?'<div style="margin-top:4px">'+e(APP_NOTES)+'</div>':'')+'<div style="text-align:right;margin-top:8px"><button class="sm" style="background:#fff;color:#0a8f4a">OK</button></div>';
+ b.querySelector('button').onclick=()=>b.remove();document.body.appendChild(b);setTimeout(()=>{try{b.remove()}catch{}},20000)})();
 dbAll().then(r=>{const bn=new Set(BUILTIN.map(x=>x.name));forms=[...builtinForms(),...r.filter(x=>!bn.has(x.name))];render()});render();
 </script></body></html>

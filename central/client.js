@@ -214,3 +214,49 @@ async function pdSavedSend(id){const b=$('#svm_'+id),g=$('#svs_'+id),to=[...b.qu
  g.textContent='Sending...';try{await pdApi('POST','saved/'+id+'/email',{to});g.textContent='✓ Sent.'}catch(x){g.textContent=x.message}}
 async function pdSavedDel(id){if(!confirm('Delete this saved form from the server? This cannot be undone.'))return;try{await pdApi('DELETE','saved/'+id);pdSv.items=pdSv.items.filter(x=>x.id!==id);pdSavedList()}catch(x){pdNote(x.message,true)}}
 {const _r=render;render=function(){if(view==='saved'&&!PDC.locked){pdSavedRender();return}const o=_r.apply(this,arguments);pdSavedHome();return o}}
+
+/* ==== People & sign-in: an admin picks who is admin, staff or officer; each person sets their own password from a one-time link ==== */
+function acctHtml(){if(!session)return'';const adm=session.role==='admin';
+ const mine=APP==='officer'?'':`<div class="card"><div class="li"><span>Signed in as <b>${e(session.u)}</b> (${e(session.role)})</span><button class="alt sm" onclick="logout()">Log out</button></div></div>
+ <div class="card"><h3 style="margin-top:0">Change my password</h3><input type="hidden" id="ru" value="${e(session.u)}"><label>Your current password</label><input type="password" id="rpo" autocomplete="current-password"><label>New password (min 10 characters)</label><input type="password" id="rp" autocomplete="new-password"><div class="row"><button class="sm" onclick="resetPw()">Update password</button></div></div>`;
+ return mine+(adm&&!PDC.offline?pdPeopleCard():'')+'<p id="amsg" style="color:#c0392b"></p>'}
+const PD_ROLES=[['none','No sign-in'],['officer','Officer'],['staff','Staff'],['admin','Admin']];
+function pdPeopleCard(){setTimeout(pdPeopleLoad,0);
+ return`<div class="card" id="pdPeople"><h3 style="margin-top:0">👥 People &amp; sign-in</h3>
+ <p class="mut">Pick what each person can do. <b>Admin</b>: everything, including this list and email settings. <b>Staff</b>: forms and officers in Staff setup. <b>Officer</b>: the officer app only.
+ When you give someone a sign-in, they get a one-time setup link and choose their own password. You never see or type it.</p>
+ <div id="pplLink"></div><div id="ppl" class="mut">Loading...</div>
+ <h4 style="margin:18px 0 4px">Someone not on the officer list</h4>
+ <div class="row" style="margin:0"><input type="text" id="pxN" placeholder="Name" style="flex:1;min-width:140px"><input type="email" id="pxE" placeholder="Email (optional)" style="flex:1;min-width:160px">
+ <select id="pxR" style="width:auto"><option value="officer">Officer</option><option value="staff">Staff</option><option value="admin">Admin</option></select><button class="sm" onclick="pdPeopleAdd()">Give sign-in</button></div></div>`}
+let pdPpl=[];
+async function pdPeopleLoad(){const box=document.getElementById('ppl');if(!box)return;
+ try{const r=await pdApi('GET','users');pdPpl=r.users||[];users=pdPpl;pdPeopleList()}catch(x){box.textContent='Could not load: '+x.message}}
+function pdAcctFor(o){const em=(o.email||'').toLowerCase();return pdPpl.find(x=>x.oid&&x.oid===o.id)||(em&&pdPpl.find(x=>!x.oid&&(x.email||'').toLowerCase()===em))}
+function pdStatus(a){if(!a)return'<span class="mut">No sign-in</span>';
+ const st=a.active?'<span style="color:var(--ok)">✓ Password set</span>':(a.linkExp?'⏳ Waiting for them to set a password (link expires '+pdDate(a.linkExp)+')':'⚠️ Setup link expired: send a new one');
+ return`<span class="mut">Username <b>${e(a.u)}</b></span> · ${st}`}
+function pdRoleSel(cur,key,self){return`<select style="width:auto" ${self?'disabled title="You cannot change your own role"':''} onchange="pdRole('${key}',this.value,this)">${PD_ROLES.map(([v,l])=>`<option value="${v}" ${v===cur?'selected':''}>${l}</option>`).join('')}</select>`}
+function pdRow(name,sub,a,key){const self=a&&session&&a.u===session.u;
+ return`<div class="li" style="flex-wrap:wrap;gap:6px"><div style="flex:1;min-width:180px"><b>${e(name)}</b>${sub?` <span class="mut">${e(sub)}</span>`:''}<br><small>${pdStatus(a)}</small></div>
+ <span class="row" style="margin:0;gap:6px">${pdRoleSel(a?a.role:'none',key,self)}${a&&!self?`<button class="alt sm" onclick="pdLink('${e(a.u)}')">${a.active?'Send password reset link':'Send new setup link'}</button>`:''}</span></div>`}
+function pdPeopleList(){const box=document.getElementById('ppl');if(!box)return;const used=new Set();
+ const rows=officers.filter(o=>o.id).map(o=>{const a=pdAcctFor(o);if(a)used.add(a.u);return pdRow(o.name,o.email,a,'o:'+o.id)});
+ const other=pdPpl.filter(a=>!used.has(a.u)).map(a=>pdRow(a.name||a.u,a.email||'',a,'u:'+a.u));
+ box.className='';box.innerHTML=(rows.join('')||'<p class="mut">No officers on the list yet.</p>')+(other.length?'<h4 style="margin:16px 0 4px">Other sign-ins</h4>'+other.join(''):'')}
+const pdFindKey=k=>k.startsWith('u:')?pdPpl.find(x=>x.u===k.slice(2)):pdAcctFor(officers.find(o=>o.id===k.slice(2))||{});
+async function pdRole(key,role,sel){const a=pdFindKey(key),g=document.getElementById('amsg');if(g)g.textContent='';
+ try{if(!a&&role!=='none'){pdShowLink(await pdApi('POST','users/invite',{oid:key.slice(2),role,base:location.origin,send:!!canEmail}))}
+  else if(a&&role==='none'){if(!confirm('Remove the sign-in for '+(a.name||a.u)+'? They will be signed out everywhere.')){sel.value=a.role;return}await pdApi('DELETE','users/'+encodeURIComponent(a.u))}
+  else if(a&&role!==a.role){if(role==='admin'&&!confirm('Make '+(a.name||a.u)+' an admin? Admins can change everything, including who is an admin.')){sel.value=a.role;return}await pdApi('PUT','users/'+encodeURIComponent(a.u),{role})}
+  await pdPeopleLoad()}catch(x){pdNote(x.message,true);await pdPeopleLoad()}}
+async function pdLink(u){try{pdShowLink(await pdApi('POST','users/invite',{u,base:location.origin,send:!!canEmail}));await pdPeopleLoad()}catch(x){pdNote(x.message,true)}}
+async function pdPeopleAdd(){const name=$('#pxN').value.trim(),email=$('#pxE').value.trim(),role=$('#pxR').value;if(!name)return pdNote('Enter the person\'s name.',true);
+ try{pdShowLink(await pdApi('POST','users/invite',{name,email,role,base:location.origin,send:!!canEmail}));$('#pxN').value='';$('#pxE').value='';await pdPeopleLoad()}catch(x){pdNote(x.message,true)}}
+function pdShowLink(r){const b=document.getElementById('pplLink');if(!b)return;const who=(r.user&&r.user.name)||r.u;
+ b.innerHTML=`<div style="border:2px solid var(--ac);border-radius:12px;padding:12px;margin:0 0 12px;background:rgba(32,144,208,.06)"><b>Setup link for ${e(who)}</b> <span class="mut">(username ${e(r.u)}, works once, expires ${pdDate(r.exp)})</span>
+ <p style="margin:6px 0">${r.emailed?'✓ Emailed to '+e(r.user.email)+'. You can also give them the link below.':(r.emailError?'⚠️ The email could not be sent ('+e(r.emailError)+'). Give them the link below instead.':'Give this link to '+e(who)+' (text, email or in person). They open it and choose their password.')}</p>
+ <div class="row" style="margin:0"><input type="text" readonly value="${e(r.link)}" style="flex:1;min-width:200px;font-size:14px" onclick="this.select()"><button class="sm" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(()=>pdNote('Link copied.'),()=>this.previousElementSibling.select())">Copy link</button><button class="alt sm" onclick="document.getElementById('pplLink').innerHTML=''">Done</button></div>
+ ${/localhost|127\.0\.0\.1/.test(r.link)?'<p class="mut" style="margin:6px 0 0">This link uses this computer\'s own address. Start the server with Start TPD Central (network) so other devices can open it.</p>':''}</div>`;b.scrollIntoView({block:'nearest'})}
+/* server release next to the app version */
+{const _a=pdApply;pdApply=function(st){_a.apply(this,arguments);const el=document.getElementById('appver');if(el&&st&&st.server&&typeof APP_VER!=='undefined')el.textContent='App version '+APP_VER+' · Server '+st.server}}
